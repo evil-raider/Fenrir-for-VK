@@ -8,28 +8,31 @@ permissions:
   actions: read
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   build:
     name: Build (driven by ci/ci.sh)
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
       - name: Run CI script
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash ci/ci.sh
-      - name: Upload build log
+      - name: Upload outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: build.log
+          name: ci-out
+          path: |
+            ci-out/**
+            build.log
           if-no-files-found: warn
       - name: Publish logs to ci-logs branch
         if: always()
