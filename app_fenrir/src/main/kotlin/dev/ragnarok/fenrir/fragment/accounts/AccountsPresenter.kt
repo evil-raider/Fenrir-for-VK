@@ -855,7 +855,7 @@ class AccountsPresenter(savedInstanceState: Bundle?) :
     init {
         fireLoad(false)
 
-        if (Utils.isOfficialVKCurrent && Settings.get()
+        if (Utils.isOfficialDefault && Settings.get()
                 .accounts().anonymToken.expired_at <= System.currentTimeMillis() / 1000
         ) {
             appendJob(
