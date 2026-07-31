@@ -1,0 +1,193 @@
+=== CI start Fri Jul 31 17:00:38 UTC 2026 ===
+PWD=/home/runner/work/Fenrir-for-VK/Fenrir-for-VK
+ANDROID_HOME=/usr/local/lib/android/sdk
+ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+openjdk version "21.0.11" 2026-04-21 LTS
+OpenJDK Runtime Environment Temurin-21.0.11+10 (build 21.0.11+10-LTS)
+OpenJDK 64-Bit Server VM Temurin-21.0.11+10 (build 21.0.11+10-LTS, mixed mode, sharing)
+SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+=== available SDK packages (filtered) ===
+  build-tools;34.0.0                 | 34.0.0        | Android SDK Build-Tools 34       | build-tools/34.0.0                
+  build-tools;35.0.0                 | 35.0.0        | Android SDK Build-Tools 35       | build-tools/35.0.0                
+  build-tools;35.0.1                 | 35.0.1        | Android SDK Build-Tools 35.0.1   | build-tools/35.0.1                
+  build-tools;36.0.0                 | 36.0.0        | Android SDK Build-Tools 36       | build-tools/36.0.0                
+  build-tools;36.1.0                 | 36.1.0        | Android SDK Build-Tools 36.1     | build-tools/36.1.0                
+  build-tools;37.0.0                 | 37.0.0        | Android SDK Build-Tools 37       | build-tools/37.0.0                
+  cmake;4.1.2                        | 4.1.2         | CMake 4.1.2                      | cmake/4.1.2                       
+  platforms;android-34               | 3             | Android SDK Platform 34          | platforms/android-34              
+  platforms;android-34-ext10         | 1             | Android SDK Platform 34-ext10    | platforms/android-34-ext10        
+  platforms;android-34-ext11         | 1             | Android SDK Platform 34-ext11    | platforms/android-34-ext11        
+  platforms;android-34-ext12         | 1             | Android SDK Platform 34-ext12    | platforms/android-34-ext12        
+  platforms;android-34-ext8          | 1             | Android SDK Platform 34-ext8     | platforms/android-34-ext8         
+  platforms;android-35               | 2             | Android SDK Platform 35          | platforms/android-35              
+  platforms;android-35-ext14         | 1             | Android SDK Platform 35-ext14    | platforms/android-35-ext14        
+  platforms;android-35-ext15         | 1             | Android SDK Platform 35-ext15    | platforms/android-35-ext15        
+  platforms;android-36               | 2             | Android SDK Platform 36          | platforms/android-36              
+  platforms;android-36-ext18         | 1             | Android SDK Platform 36-ext18    | platforms/android-36-ext18        
+  platforms;android-36-ext19         | 1             | Android SDK Platform 36-ext19    | platforms/android-36-ext19        
+  platforms;android-36.1             | 1             | Android SDK Platform 36.1        | platforms/android-36.1            
+  platforms;android-37.0             | 2             | Android SDK Platform 37.0        | platforms/android-37.0            
+  platforms;android-37.1             | 1             | Android SDK Platform 37.1        | platforms/android-37.1            
+  build-tools;34.0.0                                                              | 34.0.0            | Android SDK Build-Tools 34                                                      
+  build-tools;34.0.0-rc1                                                          | 34.0.0 rc1        | Android SDK Build-Tools 34-rc1                                                  
+  build-tools;34.0.0-rc2                                                          | 34.0.0 rc2        | Android SDK Build-Tools 34-rc2                                                  
+  build-tools;34.0.0-rc3                                                          | 34.0.0 rc3        | Android SDK Build-Tools 34-rc3                                                  
+  build-tools;35.0.0                                                              | 35.0.0            | Android SDK Build-Tools 35                                                      
+  build-tools;35.0.0-rc1                                                          | 35.0.0 rc1        | Android SDK Build-Tools 35-rc1                                                  
+  build-tools;35.0.0-rc2                                                          | 35.0.0 rc2        | Android SDK Build-Tools 35-rc2                                                  
+  build-tools;35.0.0-rc3                                                          | 35.0.0 rc3        | Android SDK Build-Tools 35-rc3                                                  
+  build-tools;35.0.0-rc4                                                          | 35.0.0 rc4        | Android SDK Build-Tools 35-rc4                                                  
+  build-tools;35.0.1                                                              | 35.0.1            | Android SDK Build-Tools 35.0.1                                                  
+  build-tools;36.0.0                                                              | 36.0.0            | Android SDK Build-Tools 36                                                      
+  build-tools;36.0.0-rc1                                                          | 36.0.0 rc1        | Android SDK Build-Tools 36-rc1                                                  
+  build-tools;36.0.0-rc3                                                          | 36.0.0 rc3        | Android SDK Build-Tools 36-rc3                                                  
+  build-tools;36.0.0-rc4                                                          | 36.0.0 rc4        | Android SDK Build-Tools 36-rc4                                                  
+  build-tools;36.0.0-rc5                                                          | 36.0.0 rc5        | Android SDK Build-Tools 36-rc5                                                  
+  build-tools;36.1.0                                                              | 36.1.0            | Android SDK Build-Tools 36.1                                                    
+  build-tools;36.1.0-rc1                                                          | 36.1.0 rc1        | Android SDK Build-Tools 36.1-rc1                                                
+  build-tools;37.0.0                                                              | 37.0.0            | Android SDK Build-Tools 37                                                      
+  build-tools;37.0.0-rc1                                                          | 37.0.0 rc1        | Android SDK Build-Tools 37-rc1                                                  
+  build-tools;37.0.0-rc2                                                          | 37.0.0 rc2        | Android SDK Build-Tools 37-rc2                                                  
+  cmake;4.0.2                                                                     | 4.0.2             | CMake 4.0.2                                                                     
+  cmake;4.0.3                                                                     | 4.0.3             | CMake 4.0.3                                                                     
+  cmake;4.1.0                                                                     | 4.1.0             | CMake 4.1.0                                                                     
+  cmake;4.1.1                                                                     | 4.1.1             | CMake 4.1.1                                                                     
+  cmake;4.1.2                                                                     | 4.1.2             | CMake 4.1.2                                                                     
+  ndk;30.0.14904198                                                               | 30.0.14904198 rc1 | NDK (Side by side) 30.0.14904198                                                
+  ndk;30.0.15729638                                                               | 30.0.15729638 rc2 | NDK (Side by side) 30.0.15729638                                                
+  platforms;android-34                                                            | 3                 | Android SDK Platform 34                                                         
+  platforms;android-34-ext10                                                      | 1                 | Android SDK Platform 34-ext10                                                   
+  platforms;android-34-ext11                                                      | 1                 | Android SDK Platform 34-ext11                                                   
+  platforms;android-34-ext12                                                      | 1                 | Android SDK Platform 34-ext12                                                   
+  platforms;android-34-ext8                                                       | 1                 | Android SDK Platform 34-ext8                                                    
+  platforms;android-35                                                            | 2                 | Android SDK Platform 35                                                         
+  platforms;android-35-ext14                                                      | 1                 | Android SDK Platform 35-ext14                                                   
+  platforms;android-35-ext15                                                      | 1                 | Android SDK Platform 35-ext15                                                   
+  platforms;android-36                                                            | 2                 | Android SDK Platform 36                                                         
+  platforms;android-36-ext18                                                      | 1                 | Android SDK Platform 36-ext18                                                   
+  platforms;android-36-ext19                                                      | 1                 | Android SDK Platform 36-ext19                                                   
+  platforms;android-36.1                                                          | 1                 | Android SDK Platform 36.1                                                       
+  platforms;android-37.0                                                          | 2                 | Android SDK Platform 37.0                                                       
+  platforms;android-37.1                                                          | 1                 | Android SDK Platform 37.1                                                       
+  platforms;android-37.2-beta1                                                    | 1                 | Android SDK Platform 37.2-beta1                                                 
+=== accept licenses ===
+yes: standard output: Broken pipe
+=== install SDK packages ===
+Loading package information...                                                  Loading local repository...                                                     [                                       ] 3% Loading local repository...        [                                       ] 3% Fetch remote repository...         [=                                      ] 3% Fetch remote repository...         [=                                      ] 4% Fetch remote repository...         [=                                      ] 5% Fetch remote repository...         [==                                     ] 5% Fetch remote repository...         [==                                     ] 6% Fetch remote repository...         [==                                     ] 7% Fetch remote repository...         [==                                     ] 7% Computing updates...               [===                                    ] 8% Computing updates...               [===                                    ] 10% Computing updates...                                                                                              Warning: Failed to find package 'platforms;android-37'
+[===                                    ] 10% Computing updates...              sdkmanager exit=1
+=== gradle :app_fenrir:tasks ===
+Downloading https://services.gradle.org/distributions/gradle-9.6.1-bin.zip
+.............10%.............20%..............30%.............40%..............50%.............60%.............70%..............80%.............90%..............100%
+
+Welcome to Gradle 9.6.1!
+
+Here are the highlights of this release:
+ - Improved Configuration Cache hit rates
+ - Additional CLI rendering options
+ - Important project hierarchy lookup deprecations
+
+For more details see https://docs.gradle.org/9.6.1/release-notes.html
+
+Starting a Gradle Daemon (subsequent builds will be faster)
+
+> Task :app_fenrir:tasks
+
+------------------------------------------------------------
+Tasks runnable from project ':app_fenrir'
+------------------------------------------------------------
+
+Android tasks
+-------------
+signingReport - Displays the signing info for the base and test modules
+
+Build tasks
+-----------
+assemble - Assemble main outputs for all the variants.
+assembleAndroidTest - Assembles all the Test applications.
+assembleDebug - Assembles main outputs for all Debug variants.
+assembleFenrir - Assembles main outputs for all Fenrir variants.
+assembleKate - Assembles main outputs for all Kate variants.
+assembleRelease - Assembles main outputs for all Release variants.
+assembleUnitTest - Assembles all the unit test applications.
+build - Assembles and tests this project.
+buildDependents - Assembles and tests this project and all projects that depend on it.
+buildNeeded - Assembles and tests this project and all projects it depends on.
+bundle - Assemble bundles for all the variants.
+bundleDebug - Assembles bundles for all Debug variants.
+bundleFenrir - Assembles bundles for all Fenrir variants.
+bundleKate - Assembles bundles for all Kate variants.
+bundleRelease - Assembles bundles for all Release variants.
+clean - Deletes the build directory.
+compileFenrirDebugAndroidTestSources
+compileFenrirDebugSources
+compileFenrirDebugUnitTestSources
+compileFenrirReleaseSources
+compileKateDebugAndroidTestSources
+compileKateDebugSources
+compileKateDebugUnitTestSources
+compileKateReleaseSources
+
+Help tasks
+----------
+artifactTransforms - Displays the Artifact Transforms that can be executed in project ':app_fenrir'.
+buildEnvironment - Displays all buildscript dependencies declared in project ':app_fenrir'.
+dependencies - Displays all dependencies declared in project ':app_fenrir'.
+dependencyInsight - Displays the insight into a specific dependency in project ':app_fenrir'.
+help - Displays a help message.
+javaToolchains - Displays the detected java toolchains.
+kotlinDslAccessorsReport - Prints the Kotlin code for accessing the currently available project extensions.
+outgoingVariants - Displays the outgoing variants of project ':app_fenrir'.
+projects - Displays the sub-projects of project ':app_fenrir'.
+properties - Displays the properties of project ':app_fenrir'.
+resolvableConfigurations - Displays the configurations that can be resolved in project ':app_fenrir'.
+tasks - Displays the tasks runnable from project ':app_fenrir'.
+
+Install tasks
+-------------
+installFenrirDebug - Installs the Debug build for flavor Fenrir.
+installFenrirDebugAndroidTest - Installs the android (on device) tests for the FenrirDebug build.
+installKateDebug - Installs the Debug build for flavor Kate.
+installKateDebugAndroidTest - Installs the android (on device) tests for the KateDebug build.
+uninstallAll - Uninstall all applications.
+uninstallFenrirDebug - Uninstalls the Debug build for flavor Fenrir.
+uninstallFenrirDebugAndroidTest - Uninstalls the android (on device) tests for the FenrirDebug build.
+uninstallFenrirRelease - Uninstalls the Release build for flavor Fenrir.
+uninstallKateDebug - Uninstalls the Debug build for flavor Kate.
+uninstallKateDebugAndroidTest - Uninstalls the android (on device) tests for the KateDebug build.
+uninstallKateRelease - Uninstalls the Release build for flavor Kate.
+
+Verification tasks
+------------------
+check - Runs all checks.
+checkJetifier - Checks whether Jetifier is needed for the current project
+connectedAndroidTest - Installs and runs instrumentation tests for all flavors on connected devices.
+connectedCheck - Runs all device checks on currently connected devices.
+connectedFenrirDebugAndroidTest - Installs and runs the tests for fenrirDebug on connected devices.
+connectedKateDebugAndroidTest - Installs and runs the tests for kateDebug on connected devices.
+deviceAndroidTest - Installs and runs instrumentation tests using all Device Providers.
+deviceCheck - Runs all device checks using Device Providers and Test Servers.
+lint - Runs lint on the default variant.
+lintFenrirDebug - Print text output from the corresponding lint report task
+lintFenrirRelease - Print text output from the corresponding lint report task
+lintFix - Runs lint on the default variant and applies any safe suggestions to the source code.
+lintKateDebug - Print text output from the corresponding lint report task
+lintKateRelease - Print text output from the corresponding lint report task
+lintVitalFenrirRelease - Print text output from the corresponding lint report task
+lintVitalKateRelease - Print text output from the corresponding lint report task
+test - Run unit tests for all variants.
+testFenrirDebugUnitTest - Run unit tests for the fenrirDebug build.
+testKateDebugUnitTest - Run unit tests for the kateDebug build.
+updateLintBaseline - Updates the lint baseline using the default variant.
+
+Rules
+-----
+Pattern: clean<TaskName>: Cleans the output files of a task.
+Pattern: build<ConfigurationName>: Assembles the artifacts of a configuration.
+
+To see all tasks and more detail, run gradlew tasks --all
+
+To see more detail about a task, run gradlew help --task <task>
+
+BUILD SUCCESSFUL in 1m 17s
+1 actionable task: 1 executed
+=== CI end (gradle exit=0) Fri Jul 31 17:02:06 UTC 2026 ===
