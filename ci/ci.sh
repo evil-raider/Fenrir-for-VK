@@ -26,6 +26,12 @@ mkdir -p "$OUT"
 
 section(){ echo; echo "==================== $* ===================="; }
 
+patch_sources(){
+  section "Patch sources: force finalized targetSdk=36 (installable on release Android)"
+  sed -i -E 's/^appTargetSDK[[:space:]]*=.*/appTargetSDK = "36"/' gradle/libs.versions.toml
+  grep -E '^appCompileSDK|^appTargetSDK' gradle/libs.versions.toml || true
+}
+
 install_sdk(){
   section "Install SDK packages"
   yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
@@ -44,8 +50,9 @@ ensure_release(){
 }
 
 native_key(){
-  local h
-  h=$( { find native -type f -not -path '*/build/*' -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null; sha256sum gradle/libs.versions.toml 2>/dev/null; echo "ff${FFMPEG_VERSION}-api${FF_API}-ndk${NDK_VER}-cmake${CMAKE_VER}"; } | sha256sum | cut -c1-16 )
+  local h relevant
+  relevant="$(grep -E '^(appCompileSDK|appBuildTools|appNdk|appCMake|appMinSDKDevelop|appMinSDKNotDevelop|developerBuild|targetAbiDevelop|targetAbiNotDevelop)[[:space:]]*=' gradle/libs.versions.toml 2>/dev/null)"
+  h=$( { find native -type f -not -path '*/build/*' -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null; echo "$relevant"; echo "ff${FFMPEG_VERSION}-api${FF_API}-ndk${NDK_VER}-cmake${CMAKE_VER}"; } | sha256sum | cut -c1-16 )
   echo "native-${h}"
 }
 
@@ -89,12 +96,19 @@ build_app(){
   find app_fenrir/build/outputs/apk -name '*.apk' 2>/dev/null | sort || true
   local apk; apk="$(find app_fenrir/build/outputs/apk -name '*ebug*.apk' 2>/dev/null | grep -i fenrir | head -n1)"
   [ -n "$apk" ] || { echo "ERROR: APK not found"; return 1; }
+  section "APK diagnostics (sdk + signature)"
+  local AAPT2 APKSIGNER
+  AAPT2="$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n1)"
+  if [ -n "$AAPT2" ]; then "$AAPT2" dump badging "$apk" 2>&1 | grep -Ei 'package:|sdkVersion|targetSdkVersion|native-code|compileSdk' || true; else echo "aapt2 not found"; fi
+  APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1)"
+  if [ -n "$APKSIGNER" ]; then "$APKSIGNER" verify --verbose "$apk" 2>&1 | grep -Ei 'Verified using|scheme|Number of signers|WARNING|ERROR' || true; else echo "apksigner not found"; fi
   cp "$apk" "$OUT/"
   ensure_release "$APK_TAG"
   gh release upload "$APK_TAG" --repo "$REPO" --clobber "$apk" || echo "WARN: apk upload failed"
   echo "APK published to release '${APK_TAG}': $(basename "$apk")"
 }
 
+patch_sources
 install_sdk
 STATUS=0
 build_native_aar || STATUS=$?
