@@ -30,11 +30,6 @@ patch_sources(){
   section "Patch sources: force finalized targetSdk=36 (installable on release Android)"
   sed -i -E 's/^appTargetSDK[[:space:]]*=.*/appTargetSDK = "36"/' gradle/libs.versions.toml
   grep -E '^appCompileSDK|^appTargetSDK' gradle/libs.versions.toml || true
-  section "Patch sources: build arm64-v8a only (drop armeabi-v7a + x86_64)"
-  sed -i -E 's/^targetAbiNotDevelop[[:space:]]*=.*/targetAbiNotDevelop = "arm64-v8a"/' gradle/libs.versions.toml
-  sed -i 's/setOf("arm64-v8a", "armeabi-v7a", "x86_64")/setOf("arm64-v8a")/' native/build.gradle.kts
-  echo "targetAbiNotDevelop -> $(grep -E '^targetAbiNotDevelop' gradle/libs.versions.toml || echo MISSING)"
-  echo "native abiFilters   -> $(grep -n 'abiFilters.addAll' native/build.gradle.kts || echo MISSING)"
 }
 
 install_sdk(){
