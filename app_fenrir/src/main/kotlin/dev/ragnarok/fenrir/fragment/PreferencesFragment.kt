@@ -1670,7 +1670,6 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
                     true
                 }
             }
-
             customText("local_audio_folder_b", parentFragmentManager) {
                 titleRes = R.string.local_audio_folder_b
                 iconRes = R.drawable.dir_song

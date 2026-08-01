@@ -646,11 +646,11 @@ internal class MainSettings(context: Context) : IMainSettings {
             }
             return ret!!
         }
-
-    override val photoDir: String
     override val localAudioFolderB: String?
         get() = getPreferences(app).getString("local_audio_folder_b", null)
 
+
+    override val photoDir: String
         get() {
             var ret = getPreferences(app).getString("photo_dir", null)
             if (ret.isNullOrEmpty() || !File(ret).exists()) {
