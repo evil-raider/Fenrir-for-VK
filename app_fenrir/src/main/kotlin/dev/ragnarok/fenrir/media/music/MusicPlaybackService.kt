@@ -41,6 +41,8 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import androidx.work.ExistingWorkPolicy
+import androidx.work.WorkManager
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -61,6 +63,7 @@ import dev.ragnarok.fenrir.picasso.PicassoInstance
 import dev.ragnarok.fenrir.settings.Settings
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.GetLocalTrackLink
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
+import dev.ragnarok.fenrir.util.DownloadWorkUtils.makeDownloadRequestAudio
 import dev.ragnarok.fenrir.util.Logger
 import dev.ragnarok.fenrir.util.Utils
 import dev.ragnarok.fenrir.util.coroutines.CancelableJob
@@ -709,6 +712,22 @@ class MusicPlaybackService : MediaSessionService() {
                         val accountId = Settings.get().accounts().current
                         val audio = mediaItem?.localConfiguration?.tag as? Audio
                         if (audio != null && !Utils.isHiddenAccount(accountId) && !audio.isLocalServer && !audio.isLocal) {
+                            // FENRIR-CI: transparent caching — сохраняем проигрываемый онлайн-трек в папку VK и регистрируем его
+                            if (Settings.get().main().isForce_cache
+                                && !audio.isHLS
+                                && TrackIsDownloaded(audio) == 0
+                                && audio.url?.contains("audio_api_unavailable") != true
+                            ) {
+                                try {
+                                    WorkManager.getInstance(Includes.provideApplicationContext())
+                                        .enqueueUniqueWork(
+                                            "transparent_cache_${audio.ownerId}_${audio.id}",
+                                            ExistingWorkPolicy.KEEP,
+                                            makeDownloadRequestAudio(audio, accountId)
+                                        )
+                                } catch (_: Exception) {
+                                }
+                            }
                             var single = audioInteractor.trackEvents(
                                 accountId,
                                 audio
