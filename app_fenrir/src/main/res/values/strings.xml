@@ -1069,9 +1069,11 @@
     <string name="formatted_date_tomorrow_clean">tomorrow at %1$s</string>
     <string name="formatted_date_yesterday_clean">yesterday in %1$s</string>
     <string name="owner_s_posts">Owner\'s posts</string>
-    <string name="auto_download_music_enable">Auto download music</string>
+    <string name="auto_download_music_enable">Auto-download every night at 5:00</string>
     <string name="auto_download_music_enable_summary">Automatically download music to offline</string>
     <string name="auto_download_music_wifi_only">Wi-Fi only</string>
+    <string name="auto_download_music_charging_only">Only while charging</string>
+    <string name="auto_download_music_charging_only_summary">Sync only when the device is plugged in</string>
     <string name="local_audio_folder_b">Folder with local music (download folder)</string>
     <string name="scheduled">Scheduled</string>
     <string name="all_posts">All posts</string>
@@ -1471,6 +1473,7 @@
     <string name="twitter" translatable="false">Twitter</string>
     <string name="facebook" translatable="false">Facebook</string>
     <string name="force_cache">Force playing from downloads</string>
+    <string name="force_cache_summary">Playback from downloads does not mix in local files</string>
     <string name="player_live" translatable="false">Live</string>
     <string name="activity_until_now">current time</string>
     <string name="direction">Direction</string>
