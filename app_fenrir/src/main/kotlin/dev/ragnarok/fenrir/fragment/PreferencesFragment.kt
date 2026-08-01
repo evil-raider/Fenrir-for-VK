@@ -367,6 +367,22 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
             preferencesAdapter?.applyToPreference("music_dir") { ss -> (ss as CustomTextPreference).reload() }
         }
     }
+
+    private val localFolderA = registerForActivityResult(
+        StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            PreferenceScreen.getPreferences(requireActivity())
+                .edit {
+                    putString(
+                        "local_audio_folder_a",
+                        result.data?.getStringExtra(Extra.PATH)
+                    )
+                }
+            preferencesAdapter?.applyToPreference("local_audio_folder_a") { ss -> (ss as CustomTextPreference).reload() }
+        }
+    }
+
     private val photoDir = registerForActivityResult(
         StartActivityForResult()
     ) { result ->
@@ -1599,6 +1615,25 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
                         return@onClick true
                     }
                     musicDir.launch(
+                        FileManagerSelectActivity.makeFileManager(
+                            requireActivity(),
+                            Environment.getExternalStorageDirectory().absolutePath,
+                            "dirs", null
+                        )
+                    )
+                    true
+                }
+            }
+
+            customText("local_audio_folder_a", parentFragmentManager) {
+                title = "Папка с локальной музыкой"
+                iconRes = R.drawable.dir_song
+                onClick {
+                    if (!AppPerms.hasReadStoragePermission(requireActivity())) {
+                        requestReadPermission.launch()
+                        return@onClick true
+                    }
+                    localFolderA.launch(
                         FileManagerSelectActivity.makeFileManager(
                             requireActivity(),
                             Environment.getExternalStorageDirectory().absolutePath,
@@ -3021,3 +3056,4 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
         }
     }
 }
+
