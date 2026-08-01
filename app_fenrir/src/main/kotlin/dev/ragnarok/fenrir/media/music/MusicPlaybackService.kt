@@ -460,7 +460,7 @@ class MusicPlaybackService : MediaSessionService() {
             DefaultDataSource.Factory(service)
 
         internal fun makeMediaSource(audio: Audio): MediaSource {
-            if (Settings.get().main().isForce_cache && TrackIsDownloaded(audio) == 1)
+            if (!audio.isLocal && !audio.isLocalServer && TrackIsDownloaded(audio) == 1)
                 audio.setUrl(GetLocalTrackLink(audio))
             var res: String? = audio.url
             if (res?.contains("audio_api_unavailable") == true) {
