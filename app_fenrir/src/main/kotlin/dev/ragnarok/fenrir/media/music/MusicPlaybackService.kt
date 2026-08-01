@@ -73,6 +73,7 @@ import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.hiddenIO
 import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.toMain
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
+import java.io.File
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import kotlin.random.Random
@@ -463,8 +464,15 @@ class MusicPlaybackService : MediaSessionService() {
             DefaultDataSource.Factory(service)
 
         internal fun makeMediaSource(audio: Audio): MediaSource {
-            if (!audio.isLocal && !audio.isLocalServer && TrackIsDownloaded(audio) == 1)
-                audio.setUrl(GetLocalTrackLink(audio))
+            if (!audio.isLocal && !audio.isLocalServer && TrackIsDownloaded(audio) == 1) {
+                // FENRIR-CI: локальную копию используем только если файл реально существует;
+                // иначе (файл удалён мимо приложения) откатываемся на онлайн-ссылку.
+                val localLink = GetLocalTrackLink(audio)
+                val localPath = localLink?.toUri()?.path
+                if (!localPath.isNullOrEmpty() && File(localPath).exists()) {
+                    audio.setUrl(localLink)
+                }
+            }
             var res: String? = audio.url
             if (res?.contains("audio_api_unavailable") == true) {
                 res = null

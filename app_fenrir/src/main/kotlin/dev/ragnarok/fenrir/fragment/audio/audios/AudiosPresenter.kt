@@ -19,7 +19,6 @@ import dev.ragnarok.fenrir.settings.Settings
 import dev.ragnarok.fenrir.swap
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
 import dev.ragnarok.fenrir.util.FindAtWithContent
-import dev.ragnarok.fenrir.util.FullAudioSyncWorker
 import dev.ragnarok.fenrir.util.HelperSimple
 import dev.ragnarok.fenrir.util.HelperSimple.hasHelp
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
@@ -126,7 +125,6 @@ class AudiosPresenter(
     private fun onListReceived(offset: Int, data: List<Audio>) {
         endOfContent = data.isEmpty()
         actualReceived = true
-        autoCacheMyMusic()
         if (playlistId == null && !iSSelectMode) {
             appendJob(
                 Includes.stores.tempStore().addAudios(ownerId, data, offset == 0)
@@ -172,20 +170,6 @@ class AudiosPresenter(
                     }
                 }) { }
         )
-    }
-
-    private fun autoCacheMyMusic() {
-        if (!isMyAudio || iSSelectMode || searcher.isSearchMode) {
-            return
-        }
-        if (!Settings.get().main().isAutoDownload_music) {
-            return
-        }
-        // Полная автозагрузка всей «Моей музыки» одним запуском: фоновый
-        // Worker сам пройдёт все страницы и поставит в очередь все недостающие
-        // треки, а не только те, что уже подгрузились в список. Запускается
-        // один раз за сессию приложения.
-        FullAudioSyncWorker.startOnceThisSession(accountId)
     }
 
     fun playAudio(context: Context, position: Int) {
