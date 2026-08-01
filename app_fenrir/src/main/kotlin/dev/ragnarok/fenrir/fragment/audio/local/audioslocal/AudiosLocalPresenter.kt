@@ -33,6 +33,8 @@ class AudiosLocalPresenter(accountId: Long, savedInstanceState: Bundle?) :
     AccountDependencyPresenter<IAudiosLocalView>(accountId, savedInstanceState) {
     private val origin_audios: ArrayList<Audio> = ArrayList()
     private val audios: ArrayList<Audio> = ArrayList()
+    private val mediaStoreAudios: ArrayList<Audio> = ArrayList()
+    private val folderAudios: ArrayList<Audio> = ArrayList()
     private val audioListDisposable = CompositeJob()
     private val uploadManager: IUploadManager = Includes.uploadManager
     private val uploadsData: MutableList<Upload> = ArrayList(0)
@@ -170,10 +172,26 @@ class AudiosLocalPresenter(accountId: Long, savedInstanceState: Bundle?) :
                 Stores.instance
                     .localMedia()
                     .getAudios(accountId)
-                    .fromIOToMain({ onListReceived(it) }) { t ->
+                    .fromIOToMain({
+                        mediaStoreAudios.clear()
+                        mediaStoreAudios.addAll(it)
+                        rebuildOrigin()
+                    }) { t ->
                         onListGetError(
                             t
                         )
+                    })
+            audioListDisposable.add(
+                Stores.instance
+                    .localMedia()
+                    .getLocalAudiosFromFolders(accountId)
+                    .fromIOToMain({
+                        folderAudios.clear()
+                        folderAudios.addAll(it)
+                        rebuildOrigin()
+                    }) {
+                        folderAudios.clear()
+                        rebuildOrigin()
                     })
         } else {
             audioListDisposable.add(
@@ -186,6 +204,30 @@ class AudiosLocalPresenter(accountId: Long, savedInstanceState: Bundle?) :
                         )
                     })
         }
+    }
+
+    private fun rebuildOrigin() {
+        val merged = ArrayList<Audio>(folderAudios.size + mediaStoreAudios.size)
+        val seen = HashSet<String>()
+        for (a in folderAudios) {
+            if (seen.add(mergeKey(a))) {
+                merged.add(a)
+            }
+        }
+        for (a in mediaStoreAudios) {
+            if (seen.add(mergeKey(a))) {
+                merged.add(a)
+            }
+        }
+        actualReceived = true
+        origin_audios.clear()
+        origin_audios.addAll(merged)
+        updateCriteria()
+        setLoadingNow(false)
+    }
+
+    private fun mergeKey(a: Audio): String {
+        return ((a.artist ?: "") + "|" + (a.title ?: "")).lowercase(Locale.getDefault())
     }
 
     private fun onListReceived(data: List<Audio>) {

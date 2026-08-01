@@ -12,6 +12,7 @@ import android.provider.MediaStore
 import android.util.Size
 import androidx.annotation.RequiresApi
 import androidx.core.graphics.scale
+import de.maxr1998.modernpreferences.PreferenceScreen
 import dev.ragnarok.fenrir.Constants
 import dev.ragnarok.fenrir.db.interfaces.ILocalMediaStorage
 import dev.ragnarok.fenrir.filePathToUri
@@ -24,6 +25,8 @@ import dev.ragnarok.fenrir.model.LocalPhoto
 import dev.ragnarok.fenrir.model.LocalVideo
 import dev.ragnarok.fenrir.picasso.Content_Local
 import dev.ragnarok.fenrir.picasso.PicassoInstance.Companion.buildUriForPicasso
+import dev.ragnarok.fenrir.settings.Settings
+import dev.ragnarok.fenrir.util.LocalAudioFolderScanner
 import dev.ragnarok.fenrir.util.Utils.safeCountOf
 import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.isActive
 import kotlinx.coroutines.flow.Flow
@@ -85,6 +88,23 @@ internal class LocalMediaStorage(mRepositoryContext: AppStorages) : AbsStorage(m
                 cursor.close()
             }
             emit(data)
+        }
+    }
+
+    override fun getLocalAudiosFromFolders(accountId: Long): Flow<List<Audio>> {
+        return flow {
+            val folders = LinkedHashSet<String>()
+            val musicDir = Settings.get().main().musicDir
+            if (musicDir.isNotEmpty()) {
+                folders.add(musicDir)
+            }
+            val extra = PreferenceScreen.getPreferences(context)
+                .getString("local_audio_folder_a", null)
+            if (!extra.isNullOrEmpty()) {
+                folders.add(extra)
+            }
+            val ext = Settings.get().main().audioExt
+            emit(LocalAudioFolderScanner.scanFolders(accountId, folders, ext))
         }
     }
 
