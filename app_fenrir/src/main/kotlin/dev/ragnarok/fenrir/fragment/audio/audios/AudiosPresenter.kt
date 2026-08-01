@@ -21,6 +21,7 @@ import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
 import dev.ragnarok.fenrir.util.FindAtWithContent
 import dev.ragnarok.fenrir.util.HelperSimple
 import dev.ragnarok.fenrir.util.HelperSimple.hasHelp
+import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils.getCauseIfRuntime
 import dev.ragnarok.fenrir.util.Utils.safeCheck
 import dev.ragnarok.fenrir.util.coroutines.CancelableJob
@@ -134,6 +135,7 @@ class AudiosPresenter(
             audios.clear()
             audios.addAll(data)
             view?.notifyListChanged()
+            mergeLocalUnified()
         } else {
             val startOwnSize = audios.size
             audios.addAll(data)
@@ -152,6 +154,22 @@ class AudiosPresenter(
                 }
             }
         }
+    }
+
+    private fun mergeLocalUnified() {
+        if (!isMyAudio || iSSelectMode || searcher.isSearchMode) {
+            return
+        }
+        audioListDisposable.add(
+            UnifiedPlaylist.appendLocalOnly(accountId, audios)
+                .fromIOToMain({ extras ->
+                    if (extras.nonNullNoEmpty()) {
+                        val startPos = audios.size
+                        audios.addAll(extras)
+                        view?.notifyDataAdded(startPos, extras.size)
+                    }
+                }) { }
+        )
     }
 
     fun playAudio(context: Context, position: Int) {
