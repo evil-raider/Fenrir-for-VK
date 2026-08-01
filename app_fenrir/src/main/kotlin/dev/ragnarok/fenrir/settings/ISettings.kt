@@ -136,8 +136,8 @@ interface ISettings {
         val isShow_wall_cover: Boolean
         val isDeveloper_mode: Boolean
         val isForce_cache: Boolean
-        val isAutoDownload_music: Boolean
-        val isAutoDownload_music_wifi_only: Boolean
+        var isAutoDownload_music: Boolean
+        var isAutoDownload_music_wifi_only: Boolean
         val isKeepLongpoll: Boolean
         fun setDisableErrorFCM(en: Boolean)
         val isDisabledErrorFCM: Boolean
@@ -173,6 +173,7 @@ interface ISettings {
         val is_notification_force_link: Boolean
         val isEnable_show_audio_top: Boolean
         val isUse_internal_downloader: Boolean
+        val localAudioFolderB: String?
         val isEnable_last_read: Boolean
         val isNot_read_show: Boolean
         val isHeaders_in_dialog: Boolean

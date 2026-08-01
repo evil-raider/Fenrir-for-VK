@@ -1184,6 +1184,10 @@
     <string name="bitrate">Битрейт: %1$d kbs, Размер: %2$s</string>
     <string name="error_timeout_message">Превышено время ожидание запроса</string>
     <string name="error_unknown_host">Нет подключения к сети</string>
+    <string name="auto_download_music_enable">Автоматическое скачивание музыки</string>
+    <string name="auto_download_music_enable_summary">Автоматически скачивать музыку для офлайн прослушивания</string>
+    <string name="auto_download_music_wifi_only">Только через Wi-Fi</string>
+    <string name="local_audio_folder_b">Папка для загруженной музыки</string>
     <string name="login_sms_code_hint">Код из SMS</string>
     <string name="button_proxy">Прокси</string>
     <string name="button_settings">Настройки</string>
