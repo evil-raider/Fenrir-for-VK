@@ -60,7 +60,13 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
     private val audioInteractor: IAudioInteractor = InteractorFactory.createAudioInteractor()
 
-    private fun buildForeground(text: String): ForegroundInfo {
+    // Канал уведомлений создаём один раз за запуск воркера, а не на каждый тик прогресса.
+    private var channelCreated = false
+
+    private fun ensureChannel() {
+        if (channelCreated) {
+            return
+        }
         val manager =
             applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(
@@ -70,6 +76,11 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
                 NotificationManager.IMPORTANCE_NONE
             )
         )
+        channelCreated = true
+    }
+
+    private fun buildForeground(text: String): ForegroundInfo {
+        ensureChannel()
         val builder = NotificationCompat.Builder(applicationContext, FOREGROUND_CHANNEL_ID)
             .setContentTitle(applicationContext.getString(R.string.downloading))
             .setContentText(text)
@@ -258,46 +269,45 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
     /**
      * Простое потоковое скачивание url -> target. Возвращает true при успехе.
-     * Без уведомлений; удаляет частичный файл при ошибке/остановке.
+     * Без уведомлений; при ошибке/остановке/неуспешном ответе удаляет частичный
+     * или пустой файл. Все ресурсы (ответ, входной и выходной потоки)
+     * закрываются через use{}, даже если запись прервётся исключением.
      */
     private fun downloadRaw(url: String?, target: File): Boolean {
         if (url.isNullOrEmpty()) {
             return false
         }
+        var success = false
         try {
-            FileOutputStream(target).use { output ->
-                val client = Utils.createOkHttp(Constants.DOWNLOAD_TIMEOUT, false).build()
-                val request: Request = Request.Builder().url(url).build()
-                val response = client.newCall(request).execute()
-                if (!response.isSuccessful) {
-                    response.close()
-                    return false
-                }
-                val input = BufferedInputStream(response.body.byteStream())
-                val buffer = ByteArray(80 * 1024)
-                var len: Int
-                while (input.read(buffer).also { len = it } != -1) {
-                    if (isStopped) {
-                        input.close()
-                        response.close()
-                        if (target.exists()) {
-                            target.delete()
+            val client = Utils.createOkHttp(Constants.DOWNLOAD_TIMEOUT, false).build()
+            val request: Request = Request.Builder().url(url).build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    // Файл создаём только после подтверждения успешного ответа,
+                    // чтобы не оставлять осиротевший 0-байтный файл при ошибке.
+                    FileOutputStream(target).use { output ->
+                        BufferedInputStream(response.body.byteStream()).use { input ->
+                            val buffer = ByteArray(80 * 1024)
+                            var len: Int
+                            while (input.read(buffer).also { len = it } != -1) {
+                                if (isStopped) {
+                                    return@use
+                                }
+                                output.write(buffer, 0, len)
+                            }
+                            success = true
                         }
-                        return false
                     }
-                    output.write(buffer, 0, len)
                 }
-                input.close()
-                response.close()
             }
-            return true
         } catch (e: Exception) {
             e.printStackTrace()
-            if (target.exists()) {
-                target.delete()
-            }
-            return false
+            success = false
         }
+        if (!success && target.exists()) {
+            target.delete()
+        }
+        return success
     }
 
     companion object {
