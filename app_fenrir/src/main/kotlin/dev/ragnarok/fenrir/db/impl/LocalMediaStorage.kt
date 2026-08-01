@@ -103,6 +103,10 @@ internal class LocalMediaStorage(mRepositoryContext: AppStorages) : AbsStorage(m
             if (!extra.isNullOrEmpty()) {
                 folders.add(extra)
             }
+            val extraB = Settings.get().main().localAudioFolderB
+            if (!extraB.isNullOrEmpty()) {
+                folders.add(extraB)
+            }
             val ext = Settings.get().main().audioExt
             emit(LocalAudioFolderScanner.scanFolders(accountId, folders, ext))
         }

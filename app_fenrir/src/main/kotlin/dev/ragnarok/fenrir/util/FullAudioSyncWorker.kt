@@ -15,6 +15,7 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import de.maxr1998.modernpreferences.PreferenceScreen
 import dev.ragnarok.fenrir.Constants
 import dev.ragnarok.fenrir.Includes
 import dev.ragnarok.fenrir.R
@@ -46,9 +47,9 @@ import java.util.concurrent.TimeUnit
  * Работает как ЕЖЕДНЕВНАЯ периодическая задача (примерно в 5:00). При запуске
  * внутри doWork проверяет условия: включено ли автоскачивание, есть ли активный
  * аккаунт, есть ли Wi-Fi (если задано «только по Wi-Fi») и подключено ли зарядное
- * устройство. Если условие не выполнено — молча пропускает попытку
- * (Result.success()) и повторит её через сутки. Не запускается при заходе в
- * «Мою музыку».
+ * устройство (если включено «только при зарядке»). Если условие не выполнено —
+ * молча пропускает попытку (Result.success()) и повторит её через сутки. Не
+ * запускается при заходе в «Мою музыку».
  *
  * Воркер сам проходит все страницы «Моей музыки», собирает список ещё не
  * скачанных треков и последовательно скачивает каждый (mp3 + обложка + ID3-теги
@@ -133,8 +134,12 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         if (Settings.get().main().isAutoDownload_music_wifi_only && !isWifiConnected()) {
             return Result.success()
         }
-        // Условие зарядки: без питания не тратим заряд, пробуем через сутки.
-        if (!isCharging()) {
+        // Условие зарядки — опциональное (по умолчанию требуется). Управляется
+        // тумблером auto_download_music_charging_only в настройках. Если включено
+        // и питания нет — не тратим заряд, пробуем через сутки.
+        val requireCharging = PreferenceScreen.getPreferences(applicationContext)
+            .getBoolean("auto_download_music_charging_only", true)
+        if (requireCharging && !isCharging()) {
             return Result.success()
         }
 
