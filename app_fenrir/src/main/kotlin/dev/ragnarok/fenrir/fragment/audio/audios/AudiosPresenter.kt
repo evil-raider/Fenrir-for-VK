@@ -178,12 +178,12 @@ class AudiosPresenter(
         if (!isMyAudio || iSSelectMode || searcher.isSearchMode) {
             return
         }
-        if (!Settings.get().main().isForce_cache) {
+        if (!Settings.get().main().isAutoDownload_music) {
             return
         }
         // Полная автозагрузка всей «Моей музыки» одним запуском: фоновый
         // Worker сам пройдёт все страницы и поставит в очередь все недостающие
-        // треки, а не только тев72 что уже подгрузились в список. Запускается
+        // треки, а не только те, что уже подгрузились в список. Запускается
         // один раз за сессию приложения.
         FullAudioSyncWorker.startOnceThisSession(accountId)
     }

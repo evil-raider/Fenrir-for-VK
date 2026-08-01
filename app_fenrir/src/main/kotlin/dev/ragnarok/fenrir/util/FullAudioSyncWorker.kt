@@ -50,7 +50,8 @@ import java.util.Collections
  * поэтому уведомления на каждый файл не плодятся.
  *
  * Запускается один раз за сессию (startOnceThisSession) при включённом
- * Settings.main().isForce_cache. Идемпотентность — TrackIsDownloaded(audio) == 0.
+ * Settings.main().isAutoDownload_music (и, если включено, только по Wi-Fi —
+ * см. isAutoDownload_music_wifi_only). Идемпотентность — TrackIsDownloaded(audio) == 0.
  */
 class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     Worker(context, workerParams) {
@@ -90,12 +91,24 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         return applicationContext.getString(R.string.downloading) + " " + done + " / " + total
     }
 
+    private fun isWifiConnected(): Boolean {
+        val manager =
+            applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                ?: return false
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+    }
+
     override fun doWork(): Result {
         val accountId = inputData.getLong(EXTRA_ACCOUNT, ISettings.IAccountsSettings.INVALID_ID)
         if (accountId == ISettings.IAccountsSettings.INVALID_ID) {
             return Result.failure()
         }
-        if (!Settings.get().main().isForce_cache) {
+        if (!Settings.get().main().isAutoDownload_music) {
+            return Result.success()
+        }
+        if (Settings.get().main().isAutoDownload_music_wifi_only && !isWifiConnected()) {
             return Result.success()
         }
 

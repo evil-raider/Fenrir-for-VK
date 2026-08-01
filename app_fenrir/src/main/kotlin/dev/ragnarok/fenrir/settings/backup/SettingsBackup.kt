@@ -97,6 +97,8 @@ class SettingsBackup {
         var developer_mode: Boolean? = null
         var do_logs: Boolean? = null
         var force_cache: Boolean? = null
+        var auto_download_music_enable: Boolean? = null
+        var auto_download_music_wifi_only: Boolean? = null
         var disable_history: Boolean? = null
         var show_wall_cover: Boolean? = null
         var custom_chat_color: Int? = null

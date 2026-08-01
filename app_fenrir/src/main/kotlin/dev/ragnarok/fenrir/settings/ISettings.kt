@@ -136,6 +136,8 @@ interface ISettings {
         val isShow_wall_cover: Boolean
         val isDeveloper_mode: Boolean
         val isForce_cache: Boolean
+        val isAutoDownload_music: Boolean
+        val isAutoDownload_music_wifi_only: Boolean
         val isKeepLongpoll: Boolean
         fun setDisableErrorFCM(en: Boolean)
         val isDisabledErrorFCM: Boolean
