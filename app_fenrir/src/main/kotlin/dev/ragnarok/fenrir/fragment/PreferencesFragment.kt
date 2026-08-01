@@ -1443,6 +1443,13 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
                 dependency = "auto_download_music_enable"
             }
 
+            switch("auto_download_music_charging_only") {
+                defaultValue = true
+                titleRes = R.string.auto_download_music_charging_only
+                summaryRes = R.string.auto_download_music_charging_only_summary
+                dependency = "auto_download_music_enable"
+            }
+
                 titleRes = R.string.use_api_5_90_for_audio
                 defaultValue = true
             }
@@ -1456,6 +1463,7 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
 
             switch("force_cache") {
                 titleRes = R.string.force_cache
+                summaryRes = R.string.force_cache_summary
             }
 
             switch("use_long_click_download") {
