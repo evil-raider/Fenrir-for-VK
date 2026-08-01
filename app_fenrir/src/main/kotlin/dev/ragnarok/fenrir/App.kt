@@ -16,6 +16,7 @@ import dev.ragnarok.fenrir.service.KeepLongpollService
 import dev.ragnarok.fenrir.settings.Settings
 import dev.ragnarok.fenrir.util.Camera2ImageProcessingUtil
 import dev.ragnarok.fenrir.util.Camera2SurfaceUtil
+import dev.ragnarok.fenrir.util.FullAudioSyncWorker
 import dev.ragnarok.fenrir.util.PersistentLogger
 import dev.ragnarok.fenrir.util.Utils
 import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.sharedFlowToMain
@@ -75,6 +76,9 @@ class App : Application() {
         if (Settings.get().main().isKeepLongpoll) {
             KeepLongpollService.start(this)
         }
+
+        // FENRIR-CI: планируем ежедневное фоновое автоскачивание «Моей музыки» (~5:00).
+        FullAudioSyncWorker.schedule()
 
         messages
             .observePeerUpdates()

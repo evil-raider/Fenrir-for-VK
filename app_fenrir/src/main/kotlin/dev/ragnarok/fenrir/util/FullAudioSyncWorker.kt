@@ -6,12 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import androidx.work.Data
-import androidx.work.ExistingWorkPolicy
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ForegroundInfo
-import androidx.work.OneTimeWorkRequest
+import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
@@ -37,21 +37,23 @@ import okhttp3.Request
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.util.Collections
+import java.util.Calendar
+import java.util.concurrent.TimeUnit
 
 /**
  * FENRIR-CI (Этап 4): фоновый Worker полной автозагрузки всей «Моей музыки».
  *
- * Воркер сам проходит все страницы «Моей музыки» через
- * IAudioInteractor.get(...offset...), собирает список ещё не скачанных треков и
- * последовательно скачивает каждый (mp3 + обложка + ID3-теги + регистрация),
- * поддерживая ОДНО foreground-уведомление с прогрессом X / N. В отличие от
- * прежней схемы, отдельные TrackDownloadWorker больше не ставятся в очередь,
- * поэтому уведомления на каждый файл не плодятся.
+ * Работает как ЕЖЕДНЕВНАЯ периодическая задача (примерно в 5:00). При запуске
+ * внутри doWork проверяет условия: включено ли автоскачивание, есть ли активный
+ * аккаунт, есть ли Wi-Fi (если задано «только по Wi-Fi») и подключено ли зарядное
+ * устройство. Если условие не выполнено — молча пропускает попытку
+ * (Result.success()) и повторит её через сутки. Не запускается при заходе в
+ * «Мою музыку».
  *
- * Запускается один раз за сессию (startOnceThisSession) при включённом
- * Settings.main().isAutoDownload_music (и, если включено, только по Wi-Fi —
- * см. isAutoDownload_music_wifi_only). Идемпотентность — TrackIsDownloaded(audio) == 0.
+ * Воркер сам проходит все страницы «Моей музыки», собирает список ещё не
+ * скачанных треков и последовательно скачивает каждый (mp3 + обложка + ID3-теги
+ * + регистрация), поддерживая ОДНО foreground-уведомление с прогрессом X / N.
+ * Идемпотентность — TrackIsDownloaded(audio) == 0.
  */
 class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     Worker(context, workerParams) {
@@ -100,15 +102,28 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         return capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
     }
 
+    private fun isCharging(): Boolean {
+        val bm =
+            applicationContext.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                ?: return false
+        return bm.isCharging
+    }
+
     override fun doWork(): Result {
-        val accountId = inputData.getLong(EXTRA_ACCOUNT, ISettings.IAccountsSettings.INVALID_ID)
-        if (accountId == ISettings.IAccountsSettings.INVALID_ID) {
-            return Result.failure()
-        }
+        // Автоскачивание выключено — тихо выходим.
         if (!Settings.get().main().isAutoDownload_music) {
             return Result.success()
         }
+        val accountId = Settings.get().accounts().current
+        if (accountId == ISettings.IAccountsSettings.INVALID_ID) {
+            return Result.success()
+        }
+        // Условие Wi-Fi (если включено «только по Wi-Fi») — иначе пропускаем до следующих суток.
         if (Settings.get().main().isAutoDownload_music_wifi_only && !isWifiConnected()) {
+            return Result.success()
+        }
+        // Условие зарядки: без питания не тратим заряд, пробуем через сутки.
+        if (!isCharging()) {
             return Result.success()
         }
 
@@ -287,36 +302,52 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
     companion object {
         private const val UNIQUE_NAME = "full_my_music_sync"
-        private const val EXTRA_ACCOUNT = "account_id"
         private const val PAGE_COUNT = 100
         private const val MAX_PAGES = 1000
         private const val NOTIFICATION_FULL_SYNC = 4823
         private const val FOREGROUND_CHANNEL_ID = "worker_channel"
-
-        private val startedSessions = Collections.synchronizedSet(HashSet<Long>())
+        private const val TARGET_HOUR = 5
 
         /**
-         * Запускает полную синхронизацию не более одного раза за сессию.
+         * Планирует ежедневную фоновую синхронизацию «Моей музыки» примерно на 5:00.
+         * Проверка условий (Wi-Fi, зарядка, наличие нового) — внутри doWork.
+         * Если автоскачивание выключено — снимает запланированную задачу.
          */
-        fun startOnceThisSession(accountId: Long) {
-            if (accountId == ISettings.IAccountsSettings.INVALID_ID) {
+        fun schedule() {
+            val context = Includes.provideApplicationContext()
+            val wm = WorkManager.getInstance(context)
+            if (!Settings.get().main().isAutoDownload_music) {
+                wm.cancelUniqueWork(UNIQUE_NAME)
                 return
             }
-            if (!startedSessions.add(accountId)) {
-                return
-            }
-            enqueue(accountId)
+            val request = PeriodicWorkRequest.Builder(
+                FullAudioSyncWorker::class.java, 1, TimeUnit.DAYS
+            )
+                .setInitialDelay(initialDelayMillisToHour(TARGET_HOUR), TimeUnit.MILLISECONDS)
+                .build()
+            wm.enqueueUniquePeriodicWork(
+                UNIQUE_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request
+            )
         }
 
-        fun enqueue(accountId: Long) {
-            val data = Data.Builder()
-                .putLong(EXTRA_ACCOUNT, accountId)
-                .build()
-            val request = OneTimeWorkRequest.Builder(FullAudioSyncWorker::class)
-                .setInputData(data)
-                .build()
+        fun cancel() {
             WorkManager.getInstance(Includes.provideApplicationContext())
-                .enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, request)
+                .cancelUniqueWork(UNIQUE_NAME)
+        }
+
+        private fun initialDelayMillisToHour(targetHour: Int): Long {
+            val now = Calendar.getInstance()
+            val next = Calendar.getInstance()
+            next.set(Calendar.HOUR_OF_DAY, targetHour)
+            next.set(Calendar.MINUTE, 0)
+            next.set(Calendar.SECOND, 0)
+            next.set(Calendar.MILLISECOND, 0)
+            if (!next.after(now)) {
+                next.add(Calendar.DAY_OF_YEAR, 1)
+            }
+            return next.timeInMillis - now.timeInMillis
         }
     }
 }
