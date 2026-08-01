@@ -3,7 +3,6 @@ package dev.ragnarok.fenrir.fragment.audio.audios
 import android.content.Context
 import android.os.Bundle
 import android.view.View
-import androidx.work.WorkManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
 import dev.ragnarok.fenrir.Includes
@@ -19,8 +18,8 @@ import dev.ragnarok.fenrir.place.PlaceFactory.getPlayerPlace
 import dev.ragnarok.fenrir.settings.Settings
 import dev.ragnarok.fenrir.swap
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
-import dev.ragnarok.fenrir.util.DownloadWorkUtils.makeDownloadRequestAudio
 import dev.ragnarok.fenrir.util.FindAtWithContent
+import dev.ragnarok.fenrir.util.FullAudioSyncWorker
 import dev.ragnarok.fenrir.util.HelperSimple
 import dev.ragnarok.fenrir.util.HelperSimple.hasHelp
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
@@ -127,7 +126,7 @@ class AudiosPresenter(
     private fun onListReceived(offset: Int, data: List<Audio>) {
         endOfContent = data.isEmpty()
         actualReceived = true
-        autoCacheMyMusic(data)
+        autoCacheMyMusic()
         if (playlistId == null && !iSSelectMode) {
             appendJob(
                 Includes.stores.tempStore().addAudios(ownerId, data, offset == 0)
@@ -175,19 +174,18 @@ class AudiosPresenter(
         )
     }
 
-    private fun autoCacheMyMusic(data: List<Audio>) {
+    private fun autoCacheMyMusic() {
         if (!isMyAudio || iSSelectMode || searcher.isSearchMode) {
             return
         }
         if (!Settings.get().main().isForce_cache) {
             return
         }
-        val workManager = WorkManager.getInstance(Includes.provideApplicationContext())
-        for (audio in data) {
-            if (!audio.isLocal && !audio.isLocalServer && TrackIsDownloaded(audio) == 0) {
-                workManager.enqueue(makeDownloadRequestAudio(audio, accountId))
-            }
-        }
+        // Полная автозагрузка всей «Моей музыки» одним запуском: фоновый
+        // Worker сам пройдёт все страницы и поставит в очередь все недостающие
+        // треки, а не только тев72 что уже подгрузились в список. Запускается
+        // один раз за сессию приложения.
+        FullAudioSyncWorker.startOnceThisSession(accountId)
     }
 
     fun playAudio(context: Context, position: Int) {
