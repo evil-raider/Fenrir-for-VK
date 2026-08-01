@@ -478,6 +478,13 @@ internal class MainSettings(context: Context) : IMainSettings {
         get() = getPreferences(app).getBoolean("disable_history", false)
     override val isShow_wall_cover: Boolean
         get() = getPreferences(app).getBoolean("show_wall_cover", true)
+    override var isAutoDownload_music: Boolean
+        get() = getPreferences(app).getBoolean("auto_download_music_enable", false)
+        set(v) { getPreferences(app).edit { putBoolean("auto_download_music_enable", v) } }
+    override var isAutoDownload_music_wifi_only: Boolean
+        get() = getPreferences(app).getBoolean("auto_download_music_wifi_only", true)
+        set(v) { getPreferences(app).edit { putBoolean("auto_download_music_wifi_only", v) } }
+
     override val colorChat: Int
         get() = getPreferences(app).getInt("custom_chat_color", Color.argb(255, 255, 255, 255))
     override val secondColorChat: Int
@@ -639,6 +646,9 @@ internal class MainSettings(context: Context) : IMainSettings {
             }
             return ret!!
         }
+    override val localAudioFolderB: String?
+        get() = getPreferences(app).getString("local_audio_folder_b", null)
+
 
     override val photoDir: String
         get() {

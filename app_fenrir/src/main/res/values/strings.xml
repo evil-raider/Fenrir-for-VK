@@ -1069,6 +1069,10 @@
     <string name="formatted_date_tomorrow_clean">tomorrow at %1$s</string>
     <string name="formatted_date_yesterday_clean">yesterday in %1$s</string>
     <string name="owner_s_posts">Owner\'s posts</string>
+    <string name="auto_download_music_enable">Auto download music</string>
+    <string name="auto_download_music_enable_summary">Automatically download music to offline</string>
+    <string name="auto_download_music_wifi_only">Wi-Fi only</string>
+    <string name="local_audio_folder_b">Folder with local music (download folder)</string>
     <string name="scheduled">Scheduled</string>
     <string name="all_posts">All posts</string>
     <string name="all_audios">All audios</string>

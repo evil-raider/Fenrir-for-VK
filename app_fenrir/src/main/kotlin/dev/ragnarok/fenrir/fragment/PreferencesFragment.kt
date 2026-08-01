@@ -383,6 +383,21 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
         }
     }
 
+    private val localFolderB = registerForActivityResult(
+        StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            PreferenceScreen.getPreferences(requireActivity())
+                .edit {
+                    putString(
+                        "local_audio_folder_b",
+                        result.data?.getStringExtra(Extra.PATH)
+                    )
+                }
+            preferencesAdapter?.applyToPreference("local_audio_folder_b") { ss -> (ss as CustomTextPreference).reload() }
+        }
+    }
+
     private val photoDir = registerForActivityResult(
         StartActivityForResult()
     ) { result ->
@@ -1416,6 +1431,18 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
 
             switch("use_api_5_90_for_audio") {
                 summaryRes = R.string.use_api_5_90_for_audio_summary
+            switch("auto_download_music_enable") {
+                defaultValue = false
+                titleRes = R.string.auto_download_music_enable
+                summaryRes = R.string.auto_download_music_enable_summary
+            }
+
+            switch("auto_download_music_wifi_only") {
+                defaultValue = true
+                titleRes = R.string.auto_download_music_wifi_only
+                dependency = "auto_download_music_enable"
+            }
+
                 titleRes = R.string.use_api_5_90_for_audio
                 defaultValue = true
             }
@@ -1643,6 +1670,25 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
                     true
                 }
             }
+            customText("local_audio_folder_b", parentFragmentManager) {
+                titleRes = R.string.local_audio_folder_b
+                iconRes = R.drawable.dir_song
+                onClick {
+                    if (!AppPerms.hasReadStoragePermission(requireActivity())) {
+                        requestReadPermission.launch()
+                        return@onClick true
+                    }
+                    localFolderB.launch(
+                        FileManagerSelectActivity.makeFileManager(
+                            requireActivity(),
+                            Environment.getExternalStorageDirectory().absolutePath,
+                            "dirs", null
+                        )
+                    )
+                    true
+                }
+            }
+
 
             customText("photo_dir", parentFragmentManager) {
                 titleRes = R.string.photo_dir
