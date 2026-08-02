@@ -3,7 +3,6 @@ package dev.ragnarok.fenrir.util
 import dev.ragnarok.fenrir.db.Stores
 import dev.ragnarok.fenrir.model.Audio
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -11,12 +10,14 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * FENRIR-CI (Этап 3): единый бесшовный плейлист — «Моя музыка» (VK) + офлайн-файлы устройства.
  *
- * Источники локальных треков (те же, что и на вкладке "На устройстве", bucket_id == 0):
- * 1. getLocalAudiosFromFolders() — папки A/B + собственная папка музыки Fenrir.
- * 2. getAudios() — общий широкий скан MediaStore по всему устройству (находит треки в любых
- *    папках, включая те, что не заданы как A/B, ровно как и вкладка "На устройстве").
- * Без источника (2) треки, лежащие вне A/B/musicDir, были видны на "На устройстве", но не
- * подмешивались в "Мою музыку" — расхождение исправлено объединением обоих источников.
+ * Источник локальных треков — getLocalAudiosFromFolders() (папки A/B + собственная папка
+ * музыки Fenrir), тот же файловый сканер, что используется во всей остальной части фичи
+ * локальных папок. Широкий скан всего устройства через MediaStore (getAudios()) сюда
+ * намеренно НЕ подмешивается — по явному требованию источник только папки A/Б/musicDir.
+ * Если трек не находится, значит его нет ни в одной из этих папок, либо приложению не
+ * хватает разрешения "Доступ ко всем файлам" (Scoped Storage, Android 11+) для чтения
+ * произвольного пути через File.listFiles() — в отличие от MediaStore-запросов, эта
+ * проверка не подменяется системой автоматически.
  *
  * appendLocalOnly() возвращает только те локальные треки, которых ещё нет в переданном
  * VK-списке (дедуп по "artist|title" без учёта регистра — тот же ключ, что и в
@@ -43,24 +44,7 @@ object UnifiedPlaylist {
     }
 
     private fun mergedLocalSnapshot(accountId: Long): Flow<List<Audio>> {
-        return combine(
-            Stores.instance.localMedia().getLocalAudiosFromFolders(accountId),
-            Stores.instance.localMedia().getAudios(accountId)
-        ) { folderAudios, deviceAudios ->
-            val merged = ArrayList<Audio>(folderAudios.size + deviceAudios.size)
-            val seen = HashSet<String>(folderAudios.size + deviceAudios.size)
-            for (a in folderAudios) {
-                if (seen.add(mergeKey(a))) {
-                    merged.add(a)
-                }
-            }
-            for (a in deviceAudios) {
-                if (seen.add(mergeKey(a))) {
-                    merged.add(a)
-                }
-            }
-            merged
-        }
+        return Stores.instance.localMedia().getLocalAudiosFromFolders(accountId)
     }
 
     fun appendLocalOnly(accountId: Long, existing: List<Audio>): Flow<List<Audio>> {
@@ -81,10 +65,10 @@ object UnifiedPlaylist {
     }
 
     /**
-     * Прогревает снимок локальных треков (папки A/B/musicDir + широкий скан устройства) без
-     * изменения текущего списка — нужен, чтобы findLocalFallback() работал и в отдельных
-     * VK-плейлистах, где appendLocalOnly() не вызывается (там локальные треки не подмешиваются
-     * в список, только используется как фолбэк при недоступности трека).
+     * Прогревает снимок локальных треков (папки A/B/musicDir) без изменения текущего списка —
+     * нужен, чтобы findLocalFallback() работал и в отдельных VK-плейлистах, где
+     * appendLocalOnly() не вызывается (там локальные треки не подмешиваются в список, только
+     * используется как фолбэк при недоступности трека).
      */
     fun warmCache(accountId: Long): Flow<List<Audio>> {
         return mergedLocalSnapshot(accountId).map { locals ->
