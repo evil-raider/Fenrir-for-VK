@@ -1991,4 +1991,5 @@
     <string name="call_reset_description">Last %1$d digits of the call</string>
     <string name="retry">Retry</string>
     <string name="video_play_with_external_player">Play in third-party player</string>
+    <string name="audios_tab_my_music">My music+offline</string>
 </resources>
