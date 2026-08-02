@@ -1473,7 +1473,6 @@
     <string name="twitter" translatable="false">Twitter</string>
     <string name="facebook" translatable="false">Facebook</string>
     <string name="force_cache">Force playing from downloads</string>
-    <string name="force_cache_summary">Playback from downloads does not mix in local files</string>
     <string name="player_live" translatable="false">Live</string>
     <string name="activity_until_now">current time</string>
     <string name="direction">Direction</string>
