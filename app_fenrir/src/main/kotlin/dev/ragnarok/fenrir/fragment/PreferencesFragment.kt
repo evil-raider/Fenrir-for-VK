@@ -383,20 +383,7 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
         }
     }
 
-    private val localFolderB = registerForActivityResult(
-        StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK && result.data != null) {
-            PreferenceScreen.getPreferences(requireActivity())
-                .edit {
-                    putString(
-                        "local_audio_folder_b",
-                        result.data?.getStringExtra(Extra.PATH)
-                    )
-                }
-            preferencesAdapter?.applyToPreference("local_audio_folder_b") { ss -> (ss as CustomTextPreference).reload() }
-        }
-    }
+    
 
     private val photoDir = registerForActivityResult(
         StartActivityForResult()
@@ -1668,24 +1655,6 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
                         return@onClick true
                     }
                     localFolderA.launch(
-                        FileManagerSelectActivity.makeFileManager(
-                            requireActivity(),
-                            Environment.getExternalStorageDirectory().absolutePath,
-                            "dirs", null
-                        )
-                    )
-                    true
-                }
-            }
-            customText("local_audio_folder_b", parentFragmentManager) {
-                titleRes = R.string.local_audio_folder_b
-                iconRes = R.drawable.dir_song
-                onClick {
-                    if (!AppPerms.hasReadStoragePermission(requireActivity())) {
-                        requestReadPermission.launch()
-                        return@onClick true
-                    }
-                    localFolderB.launch(
                         FileManagerSelectActivity.makeFileManager(
                             requireActivity(),
                             Environment.getExternalStorageDirectory().absolutePath,
