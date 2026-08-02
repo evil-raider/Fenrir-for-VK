@@ -175,7 +175,6 @@ interface ISettings {
         val isEnable_show_audio_top: Boolean
         val isUse_internal_downloader: Boolean
         val localAudioFolderA: String?
-        val localAudioFolderB: String?
         val isEnable_last_read: Boolean
         val isNot_read_show: Boolean
         val isHeaders_in_dialog: Boolean
