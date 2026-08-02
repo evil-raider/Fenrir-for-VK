@@ -347,11 +347,6 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             )
         }
 
-        fun cancel() {
-            WorkManager.getInstance(Includes.provideApplicationContext())
-                .cancelUniqueWork(UNIQUE_NAME)
-        }
-
         private fun initialDelayMillisToHour(targetHour: Int): Long {
             val now = Calendar.getInstance()
             val next = Calendar.getInstance()
