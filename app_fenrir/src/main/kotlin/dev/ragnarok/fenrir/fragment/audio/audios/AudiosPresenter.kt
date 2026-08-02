@@ -52,6 +52,7 @@ class AudiosPresenter(
     private var Curr: MutableList<AudioPlaylist>? = null
     private var loadingNow = false
     private var endOfContent = false
+    private var receivedVkCount = 0
     private var doAudioLoadTabs = false
     private var needDeadHelper: Boolean
     private fun loadedPlaylist(t: AudioPlaylist) {
@@ -87,17 +88,13 @@ class AudiosPresenter(
                                 fireRefresh()
                             } else {
                                 audios.addAll(it)
+                                receivedVkCount = it.size
                                 actualReceived = true
                                 setLoadingNow(false)
                                 view?.notifyListChanged()
                                 mergeLocalUnified()
-                                // FENRIR-CI: список пришёл из локального кэша, а не из сети, поэтому
-                                // endOfContent ещё не известен и авто-догрузка остальных страниц
-                                // (см. onListReceived) не запускалась. Догружаем самостоятельно с
-                                // той позиции, на которой остановился кэш, иначе на "тёплом"
-                                // открытии вкладки полный список для шаффла не подтягивается сам.
                                 if (isMyAudio) {
-                                    requestList(audios.size, playlistId)
+                                    requestList(receivedVkCount, playlistId)
                                 }
                             }
                         }, {
@@ -106,15 +103,6 @@ class AudiosPresenter(
                 )
             } else fireRefresh()
         } else if (isMyAudio && !iSSelectMode && !loadingNow) {
-            // FENRIR-CI (баг №3, повтор захода на вкладку): раньше здесь стоял
-            // одноразовый флаг doAudioLoadTabs, который навсегда блокировал повторный
-            // вызов этой логики после первого onGuiResumed за время жизни Presenter'а.
-            // Из-за этого локальные файлы из папок A/Б не подхватывались после выдачи
-            // разрешения "Все файлы" уже во время сессии, а прерванная (уходом с вкладки)
-            // фоновая догрузка всего каталога никогда не возобновлялась сама — только
-            // вручную через "Загрузить ещё"/scroll-to-end. Теперь на каждый повторный
-            // заход домердживаем локальные файлы и, если каталог догружен не до конца,
-            // продолжаем фоновую догрузку.
             mergeLocalUnified()
             if (!endOfContent) {
                 requestNext()
@@ -128,7 +116,7 @@ class AudiosPresenter(
 
     private fun requestNext() {
         setLoadingNow(true)
-        val offset = audios.size
+        val offset = receivedVkCount
         requestList(offset, playlistId)
     }
 
@@ -156,15 +144,16 @@ class AudiosPresenter(
         if (offset == 0) {
             audios.clear()
             audios.addAll(data)
+            receivedVkCount = data.size
             view?.notifyListChanged()
             mergeLocalUnified()
         } else {
-            val startOwnSize = audios.size
-            audios.addAll(data)
-            view?.notifyDataAdded(
-                startOwnSize,
-                data.size
-            )
+            val insertPos = audios.indexOfFirst {
+                it.url?.startsWith("file://") == true || it.url?.startsWith("content://") == true
+            }.takeIf { it >= 0 } ?: audios.size
+            audios.addAll(insertPos, data)
+            receivedVkCount += data.size
+            view?.notifyDataAdded(insertPos, data.size)
         }
         setLoadingNow(false)
         if (needDeadHelper) {
@@ -176,9 +165,6 @@ class AudiosPresenter(
                 }
             }
         }
-        // FENRIR-CI (доводка шаффла): для вкладки "Моя музыка" догружаем весь каталог
-        // целиком в фоне сразу после открытия, а не только по нажатию кнопки "Ещё", чтобы
-        // перемешивание и поиск работали по всему списку, а не только по первой загруженной странице.
         if (isMyAudio && !endOfContent && !iSSelectMode) {
             requestNext()
         }
@@ -189,10 +175,6 @@ class AudiosPresenter(
             return
         }
         if (!isMyAudio) {
-            // FENRIR-CI (Этап 3, доводка): список отдельного VK-плейлиста не меняем (только
-            // свои треки), но прогреваем снимок локальных файлов A/B, чтобы
-            // MusicPlaybackService.makeMediaSource мог найти локальную копию для
-            // удалённого/заблокированного трека через UnifiedPlaylist.findLocalFallback.
             audioListDisposable.add(
                 UnifiedPlaylist.warmCache(accountId).fromIOToMain({ }) { }
             )
@@ -202,365 +184,4 @@ class AudiosPresenter(
             UnifiedPlaylist.appendLocalOnly(accountId, audios)
                 .fromIOToMain({ extras ->
                     if (extras.nonNullNoEmpty()) {
-                        val startPos = audios.size
-                        audios.addAll(extras)
-                        view?.notifyDataAdded(startPos, extras.size)
-                    }
-                }) { }
-        )
-    }
-
-    fun playAudio(context: Context, position: Int) {
-        startForPlayList(context, audios, position)
-        if (!Settings.get().main().isShow_mini_player) getPlayerPlace(accountId).tryOpenWith(
-            context
-        )
-    }
-
-    fun fireDelete(position: Int) {
-        audios.removeAt(position)
-        view?.notifyItemRemoved(position)
-    }
-
-    override fun onDestroyed() {
-        audioListDisposable.cancel()
-        swapDisposable.cancel()
-        sleepDataDisposable.cancel()
-        super.onDestroyed()
-    }
-
-    internal fun onListGetError(t: Throwable) {
-        setLoadingNow(false)
-        showError(getCauseIfRuntime(t))
-    }
-
-    fun fireSelectAll() {
-        for (i in audios) {
-            i.isSelected = true
-        }
-        view?.notifyListChanged()
-    }
-
-    fun getSelected(noDownloaded: Boolean): ArrayList<Audio> {
-        val ret = ArrayList<Audio>()
-        for (i in audios) {
-            if (i.isSelected) {
-                if (noDownloaded) {
-                    if (TrackIsDownloaded(i) == 0 && i.url
-                            .nonNullNoEmpty() && !i.url!!.contains("file://") && !i.url!!.contains("content://")
-                    ) {
-                        ret.add(i)
-                    }
-                } else {
-                    ret.add(i)
-                }
-            }
-        }
-        return ret
-    }
-
-    fun getAudioPos(audio: Audio?): Int {
-        if (audios.isNotEmpty() && audio != null) {
-            for ((pos, i) in audios.withIndex()) {
-                if (i.id == audio.id && i.ownerId == audio.ownerId) {
-                    i.isAnimationNow = true
-                    view?.notifyItemChanged(
-                        pos
-                    )
-                    return pos
-                }
-            }
-        }
-        return -1
-    }
-
-    fun fireUpdateSelectMode() {
-        for (i in audios) {
-            if (i.isSelected) {
-                i.isSelected = false
-            }
-        }
-        view?.notifyListChanged()
-    }
-
-    private fun sleep_search(q: String?) {
-        if (loadingNow) return
-        sleepDataDisposable.cancel()
-        if (q.isNullOrEmpty()) {
-            searcher.cancel()
-        } else {
-            if (!searcher.isSearchMode) {
-                searcher.insertCache(audios, audios.size)
-            }
-            sleepDataDisposable += delayTaskFlow(WEB_SEARCH_DELAY.toLong())
-                .toMain { searcher.do_search(q) }
-        }
-    }
-
-    fun fireSearchRequestChanged(q: String?) {
-        sleep_search(q?.trim())
-    }
-
-    fun fireRefresh() {
-        if (searcher.isSearchMode) {
-            searcher.reset()
-        } else {
-            if (playlistId != null && playlistId != 0) {
-                audioListDisposable.add(
-                    audioInteractor.getPlaylistById(
-                        accountId,
-                        playlistId,
-                        ownerId,
-                        accessKey
-                    )
-                        .fromIOToMain({ t -> loadedPlaylist(t) }) { t ->
-                            showError(
-                                getCauseIfRuntime(t)
-                            )
-                        })
-            }
-            requestList(0, playlistId)
-        }
-    }
-
-    fun onDelete(album: AudioPlaylist) {
-        audioListDisposable.add(
-            audioInteractor.deletePlaylist(
-                accountId,
-                album.id,
-                album.owner_id
-            )
-                .fromIOToMain({
-                    view?.customToast?.showToast(
-                        R.string.success
-                    )
-                }) { throwable ->
-                    showError(throwable)
-                })
-    }
-
-    fun onAdd(album: AudioPlaylist) {
-        audioListDisposable.add(
-            audioInteractor.followPlaylist(
-                accountId,
-                album.id,
-                album.owner_id,
-                album.access_key
-            )
-                .fromIOToMain({
-                    view?.customToast?.showToast(R.string.success)
-                }) { throwable ->
-                    showError(throwable)
-                })
-    }
-
-    fun fireScrollToEnd() {
-        if (audios.nonNullNoEmpty() && !loadingNow && actualReceived) {
-            if (searcher.isSearchMode) {
-                searcher.do_search()
-            } else if (!endOfContent) {
-                requestNext()
-            }
-        }
-    }
-
-    fun fireEditTrack(context: Context, audio: Audio) {
-        val root = View.inflate(context, R.layout.entry_audio_info, null)
-        root.findViewById<TextInputEditText>(R.id.edit_artist).setText(audio.artist)
-        root.findViewById<TextInputEditText>(R.id.edit_title).setText(audio.title)
-        MaterialAlertDialogBuilder(context)
-            .setTitle(R.string.enter_audio_info)
-            .setCancelable(true)
-            .setView(root)
-            .setPositiveButton(R.string.button_ok) { _, _ ->
-                audioListDisposable.add(
-                    audioInteractor.edit(
-                        accountId,
-                        audio.ownerId,
-                        audio.id,
-                        root.findViewById<TextInputEditText>(R.id.edit_artist).text.toString(),
-                        root.findViewById<TextInputEditText>(R.id.edit_title).text.toString()
-                    ).fromIOToMain({ fireRefresh() }) { t ->
-                        showError(getCauseIfRuntime(t))
-                    })
-            }
-            .setNegativeButton(R.string.button_cancel, null)
-            .show()
-    }
-
-    private fun tempSwap(fromPosition: Int, toPosition: Int) {
-        if (fromPosition < toPosition) {
-            for (i in fromPosition until toPosition) {
-                audios.swap(i, i + 1)
-            }
-        } else {
-            for (i in fromPosition downTo toPosition + 1) {
-                audios.swap(i, i - 1)
-            }
-        }
-        view?.notifyItemMoved(
-            fromPosition,
-            toPosition
-        )
-    }
-
-    fun fireItemMoved(fromPosition: Int, toPosition: Int): Boolean {
-        if (audios.size < 2) {
-            return false
-        }
-        val audio_from = audios[fromPosition]
-        if (fromPosition < toPosition) {
-            for (i in fromPosition until toPosition) {
-                audios.swap(i, i + 1)
-            }
-        } else {
-            for (i in fromPosition downTo toPosition + 1) {
-                audios.swap(i, i - 1)
-            }
-        }
-        view?.notifyItemMoved(
-            fromPosition,
-            toPosition
-        )
-        var before: Int? = null
-        var after: Int? = null
-        if (toPosition == 0) {
-            before = audios[1].id
-        } else {
-            after = audios[toPosition - 1].id
-        }
-        swapDisposable.cancel()
-        swapDisposable += audioInteractor.reorder(accountId, ownerId, audio_from.id, before, after)
-            .fromIOToMain { tempSwap(toPosition, fromPosition) }
-        return true
-    }
-
-    override fun onGuiCreated(viewHost: IAudiosView) {
-        super.onGuiCreated(viewHost)
-        viewHost.displayList(audios)
-        Curr?.let {
-            viewHost.updatePlaylists(it)
-        }
-    }
-
-    private inner class FindAudio(disposable: CompositeJob) : FindAtWithContent<Audio>(
-        disposable, SEARCH_VIEW_COUNT, SEARCH_COUNT
-    ) {
-        override fun search(offset: Int, count: Int): Flow<List<Audio>> {
-            return audioInteractor[accountId, playlistId, ownerId, offset, count, accessKey]
-        }
-
-        override fun onError(e: Throwable) {
-            onListGetError(e)
-        }
-
-        override fun onResult(data: MutableList<Audio>) {
-            actualReceived = true
-            val startSize = audios.size
-            audios.addAll(data)
-            view?.notifyDataAdded(
-                startSize,
-                data.size
-            )
-        }
-
-        override fun updateLoading(loading: Boolean) {
-            setLoadingNow(loading)
-        }
-
-        override fun clean() {
-            audios.clear()
-            view?.notifyListChanged()
-        }
-
-        private fun checkArtists(data: Map<String, String>?, q: String): Boolean {
-            if (data.isNullOrEmpty()) {
-                return false
-            }
-            for (i in data.values) {
-                if (i.lowercase(Locale.getDefault())
-                        .contains(q.lowercase(Locale.getDefault()))
-                ) {
-                    return true
-                }
-            }
-            return false
-        }
-
-        private fun checkTitleArtists(data: Audio, q: String): Boolean {
-            val r = q.split(Regex("( - )|( )|( {2})"), 2).toTypedArray()
-            return if (r.size >= 2) {
-                (safeCheck(
-                    data.artist
-                ) {
-                    data.artist?.lowercase(Locale.getDefault())?.contains(
-                        r[0].lowercase(
-                            Locale.getDefault()
-                        )
-                    ) == true
-                }
-                        || checkArtists(
-                    data.main_artists,
-                    r[0]
-                )) && safeCheck(
-                    data.title
-                ) {
-                    data.title?.lowercase(Locale.getDefault())?.contains(
-                        r[1].lowercase(
-                            Locale.getDefault()
-                        )
-                    ) == true
-                }
-            } else false
-        }
-
-        override fun compare(data: Audio, q: String): Boolean {
-            return if (q == "dw") {
-                TrackIsDownloaded(data) == 0
-            } else safeCheck(
-                data.title
-            ) {
-                data.title?.lowercase(Locale.getDefault())
-                    ?.contains(q.lowercase(Locale.getDefault())) == true
-            }
-                    || safeCheck(
-                data.artist
-            ) {
-                data.artist?.lowercase(Locale.getDefault())?.contains(
-                    q.lowercase(
-                        Locale.getDefault()
-                    )
-                ) == true
-            }
-                    || checkArtists(data.main_artists, q) || checkTitleArtists(data, q)
-        }
-
-        override fun onReset(data: MutableList<Audio>, offset: Int, isEnd: Boolean) {
-            if (data.isEmpty()) {
-                fireRefresh()
-            } else {
-                endOfContent = isEnd
-                audios.clear()
-                audios.addAll(data)
-                if (playlistId == null && !iSSelectMode) {
-                    appendJob(
-                        Includes.stores.tempStore().addAudios(ownerId, data, true)
-                            .hiddenIO()
-                    )
-                }
-                view?.notifyListChanged()
-            }
-        }
-    }
-
-    companion object {
-        private const val GET_COUNT = 100
-        private const val SEARCH_COUNT = 1000
-        private const val SEARCH_VIEW_COUNT = 20
-        private const val WEB_SEARCH_DELAY = 1000
-    }
-
-    init {
-        needDeadHelper = hasHelp(HelperSimple.AUDIO_DEAD, 1)
-    }
-}
+                        val
