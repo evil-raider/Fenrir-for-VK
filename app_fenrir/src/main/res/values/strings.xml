@@ -1472,6 +1472,7 @@
     <string name="twitter" translatable="false">Twitter</string>
     <string name="facebook" translatable="false">Facebook</string>
     <string name="force_cache">Force playing from downloads</string>
+    <string name="force_cache_summary">Also enables auto-saving of an online track to the music download folder while it plays</string>
     <string name="player_live" translatable="false">Live</string>
     <string name="activity_until_now">current time</string>
     <string name="direction">Direction</string>
