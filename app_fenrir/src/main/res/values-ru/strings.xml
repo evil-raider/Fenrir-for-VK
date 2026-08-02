@@ -1350,7 +1350,7 @@
     <string name="chat_users_count">%1$d участников</string>
     <string name="display_writing">Показывать набор сообщения собеседником</string>
     <string name="download_directory">Куда скачивать</string>
-    <string name="music_dir">Музыка</string>
+    <string name="music_dir">Папка с загруженной музыкой</string>
     <string name="photo_dir">Фото</string>
     <string name="video_dir">Видео</string>
     <string name="docs_dir">Документы</string>
