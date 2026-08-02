@@ -515,6 +515,10 @@ object DownloadWorkUtils {
             Settings.get().main().musicDir,
             "mp3"
         )
+        // FENRIR-CI: баг прозрачного кэширования — в отличие от doDownloadAudio(), тут не было
+        // CheckDirectory(), и если папка для скачивания музыки ещё не создана на диске,
+        // TrackDownloadWorker падал на FileOutputStream(file) и файл тихо не сохранялся.
+        CheckDirectory(result_filename.path)
         val downloadWork = OneTimeWorkRequest.Builder(TrackDownloadWorker::class)
         val data = Data.Builder()
         data.putByteArray(ExtraDwn.URL, MsgPack.encodeToByteArrayEx(Audio.serializer(), audio))
