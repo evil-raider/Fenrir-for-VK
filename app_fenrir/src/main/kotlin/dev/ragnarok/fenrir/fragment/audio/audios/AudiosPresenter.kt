@@ -92,6 +92,14 @@ class AudiosPresenter(
                                 setLoadingNow(false)
                                 view?.notifyListChanged()
                                 mergeLocalUnified()
+                                // FENRIR-CI: список пришёл из локального кэша, а не из сети, поэтому
+                                // endOfContent ещё не известен и авто-догрузка остальных страниц
+                                // (см. onListReceived) не запускалась. Догружаем самостоятельно с
+                                // той позиции, на которой остановился кэш, иначе на "тёплом"
+                                // открытии вкладки полный список для шаффла не подтягивается сам.
+                                if (isMyAudio) {
+                                    requestList(audios.size, playlistId)
+                                }
                             }
                         }, {
                             fireRefresh()
