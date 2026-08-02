@@ -1,0 +1,1 @@
+retrigger: 2026-08-02T12:58 MSK (обновлены KEYSTORE_B64/KEYSTORE_PASS)
