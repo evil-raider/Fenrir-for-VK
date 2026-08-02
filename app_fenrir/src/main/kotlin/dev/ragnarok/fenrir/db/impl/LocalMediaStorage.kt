@@ -134,6 +134,7 @@ internal class LocalMediaStorage(mRepositoryContext: AppStorages) : AbsStorage(m
             }
             emit(result)
         }
+    }
 
     override val photos: Flow<List<LocalPhoto>>
         get() = flow {
