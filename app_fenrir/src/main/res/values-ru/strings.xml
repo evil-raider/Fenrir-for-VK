@@ -1188,7 +1188,6 @@
     <string name="auto_download_music_enable_summary">Автоскачивание каждую ночь в 5:00</string>
     <string name="auto_download_music_wifi_only">Только через Wi-Fi</string>
     <string name="auto_download_music_charging_only">Только при подключённой зарядке</string>
-    <string name="local_audio_folder_b">Папка для загруженной музыки</string>
     <string name="login_sms_code_hint">Код из SMS</string>
     <string name="button_proxy">Прокси</string>
     <string name="button_settings">Настройки</string>
@@ -1356,7 +1355,7 @@
     <string name="chat_users_count">%1$d участников</string>
     <string name="display_writing">Показывать набор сообщения собеседником</string>
     <string name="download_directory">Куда скачивать</string>
-    <string name="music_dir">Музыка</string>
+    <string name="music_dir">Папка с загруженной музыкой</string>
     <string name="photo_dir">Фото</string>
     <string name="video_dir">Видео</string>
     <string name="docs_dir">Документы</string>
