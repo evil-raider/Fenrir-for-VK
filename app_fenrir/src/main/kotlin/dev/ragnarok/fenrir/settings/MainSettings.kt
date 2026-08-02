@@ -785,4 +785,233 @@ internal class MainSettings(context: Context) : IMainSettings {
     override val isHint_stickers: Boolean
         get() = getPreferences(app).getBoolean("hint_stickers", true)
     override val isEnable_native: Boolean
-        get() = getPreferences(
+        get() = getPreferences(app).getBoolean("enable_native", true)
+    override val isRecording_to_opus: Boolean
+        get() = getPreferences(app).getBoolean("recording_to_opus", false)
+    override val isDisable_sensored_voice: Boolean
+        get() = getPreferences(app).getBoolean("disable_sensored_voice", false)
+    override var isInvertPhotoRev: Boolean
+        get() = getPreferences(app).getBoolean("invert_photo_rev", false)
+        set(rev) {
+            getPreferences(app).edit { putBoolean("invert_photo_rev", rev) }
+        }
+    override var localServer: LocalServerSettings
+        get() {
+            val ret = getPreferences(app).getString("local_media_server", null)
+            return if (ret == null) {
+                LocalServerSettings()
+            } else {
+                kJson.decodeFromString(LocalServerSettings.serializer(), ret)
+            }
+        }
+        set(settings) {
+            getPreferences(app).edit {
+                putString(
+                    "local_media_server",
+                    kJson.encodeToString(LocalServerSettings.serializer(), settings)
+                )
+            }
+        }
+    override var playerCoverBackgroundSettings: PlayerCoverBackgroundSettings
+        get() {
+            val ret = getPreferences(app).getString("player_background_settings_json", null)
+            return if (ret == null) {
+                PlayerCoverBackgroundSettings().set_default()
+            } else {
+                kJson.decodeFromString(PlayerCoverBackgroundSettings.serializer(), ret)
+            }
+        }
+        set(settings) {
+            getPreferences(app).edit {
+                putString(
+                    "player_background_settings_json",
+                    kJson.encodeToString(PlayerCoverBackgroundSettings.serializer(), settings)
+                )
+            }
+        }
+    override var slidrSettings: SlidrSettings
+        get() {
+            val ret = getPreferences(app).getString("slidr_settings_json", null)
+            return if (ret == null) {
+                SlidrSettings().set_default()
+            } else {
+                kJson.decodeFromString(SlidrSettings.serializer(), ret)
+            }
+        }
+        set(settings) {
+            getPreferences(app).edit {
+                putString(
+                    "slidr_settings_json",
+                    kJson.encodeToString(SlidrSettings.serializer(), settings)
+                )
+            }
+        }
+
+    override var catalogV2ListSort: List<Int>
+        get() {
+            val defaults = listOf(
+                CatalogV2SortListCategory.TYPE_CATALOG,
+                CatalogV2SortListCategory.TYPE_LOCAL_AUDIO,
+                CatalogV2SortListCategory.TYPE_LOCAL_SERVER_AUDIO,
+                CatalogV2SortListCategory.TYPE_AUDIO,
+                CatalogV2SortListCategory.TYPE_PLAYLIST,
+                CatalogV2SortListCategory.TYPE_RECOMMENDATIONS
+            )
+
+            val jsonString =
+                getPreferences(app).getString("catalog_v2_list_json", null) ?: return defaults
+
+            return try {
+                val data = kJson.decodeFromString(ListSerializer(Int.serializer()), jsonString)
+                var needClear = false
+                for (i in data) {
+                    var has = false
+                    for (s in defaults) {
+                        if (s == i) {
+                            has = true
+                            break
+                        }
+                    }
+                    if (!has) {
+                        needClear = true
+                        break
+                    }
+                }
+                if (needClear) {
+                    throw UnsupportedOperationException()
+                }
+                data
+            } catch (_: Exception) {
+                getPreferences(app).edit {
+                    putString(
+                        "catalog_v2_list_json",
+                        kJson.encodeToString(
+                            ListSerializer(Int.serializer()),
+                            defaults
+                        )
+                    )
+                }
+                defaults
+            }
+        }
+        set(settings) {
+            getPreferences(app).edit {
+                putString(
+                    "catalog_v2_list_json",
+                    kJson.encodeToString(ListSerializer(Int.serializer()), settings)
+                )
+            }
+        }
+
+    @get:Lang
+    override val language: Int
+        get() = try {
+            getPreferences(app).getString("language_ui", "0")!!
+                .trim().toInt()
+        } catch (_: Exception) {
+            Lang.DEFAULT
+        }
+    override val rendering_mode: Int
+        get() {
+            val defMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) 2 else 0
+            return try {
+                getPreferences(app).getString("rendering_bitmap_mode", defMode.toString())!!.trim()
+                    .toInt()
+            } catch (_: Exception) {
+                defMode
+            }
+        }
+    override val endListAnimation: Int
+        get() = try {
+            getPreferences(app).getString("end_list_anim", "0")!!
+                .trim().toInt()
+        } catch (_: Exception) {
+            0
+        }
+
+    override val isAudio_catalog_v2: Boolean
+        get() = getPreferences(app).getBoolean(
+            "audio_catalog_v2_enable",
+            true
+        ) && Utils.isOfficialVKCurrent
+
+    override val isRunes_show: Boolean
+        get() = getPreferences(app).getBoolean("runes_show", true)
+
+    override val paganSymbol: Int
+        get() = try {
+            getPreferences(app).getString("pagan_symbol", "1")!!
+                .trim().toInt()
+        } catch (_: Exception) {
+            1
+        }
+    override val customChannelNotif: Int
+        get() = getPreferences(app).getInt("custom_notification_channel", 0)
+
+    override fun nextCustomChannelNotif() {
+        val vl = customChannelNotif
+        getPreferences(app).edit { putInt("custom_notification_channel", vl + 1) }
+    }
+
+    override val videoExt: Set<String>
+        get() = getPreferences(app)
+            .getStringSet("videos_ext", setOf("mp4", "avi", "mov", "mpeg"))!!
+
+    override val photoExt: Set<String>
+        get() = getPreferences(app)
+            .getStringSet("photo_ext", setOf("jpg", "jpeg", "heic", "webp", "png", "tiff"))!!
+
+    override val audioExt: Set<String>
+        get() = getPreferences(app)
+            .getStringSet("audio_ext", setOf("mp3", "ogg", "flac", "opus"))!!
+
+    override val maxThumbResolution: Int
+        get() = try {
+            getPreferences(app).getString("max_thumb_resolution", "384")!!.trim()
+                .toInt()
+        } catch (_: Exception) {
+            384
+        }
+
+    override val isPhoto_zoom_enable_list: Boolean
+        get() = getPreferences(app).getBoolean("photo_zoom_enable_list", true)
+
+    override val longClickPhoto: Int
+        get() = try {
+            getPreferences(app).getString("long_click_photo", "1")?.trim()?.toInt()
+                ?: 1
+        } catch (_: Exception) {
+            1
+        }
+    override val isEnable_dirs_files_count: Boolean
+        get() = getPreferences(app).getBoolean("enable_dirs_files_count", true)
+
+    override val picassoDispatcher: Int
+        get() = try {
+            getPreferences(app).getString("picasso_dispatcher", "1")!!
+                .trim().toInt()
+        } catch (_: Exception) {
+            1
+        }
+
+    override val isOnlyNotViewedFollowers: Boolean
+        get() = getPreferences(app).getBoolean(
+            "only_not_viewed_followers",
+            false
+        )
+
+    companion object {
+        private const val KEY_IMAGE_SIZE = "image_size"
+        private const val KEY_JSON_STATE = "json_list_state"
+        private const val KEY_USERNAME_UIDS = "user_name_changes_uids"
+        internal fun keyForUserNameChanges(userId: Long): String {
+            return "custom_user_name_$userId"
+        }
+    }
+
+    init {
+        preferPhotoPreviewSize = empty()
+        reloadUserNameChangesSettings(false)
+        reloadOwnerChangesMonitor()
+    }
+}

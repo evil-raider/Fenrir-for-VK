@@ -12,7 +12,6 @@ import android.provider.MediaStore
 import android.util.Size
 import androidx.annotation.RequiresApi
 import androidx.core.graphics.scale
-import de.maxr1998.modernpreferences.PreferenceScreen
 import dev.ragnarok.fenrir.Constants
 import dev.ragnarok.fenrir.db.interfaces.ILocalMediaStorage
 import dev.ragnarok.fenrir.filePathToUri
@@ -98,8 +97,7 @@ internal class LocalMediaStorage(mRepositoryContext: AppStorages) : AbsStorage(m
             if (musicDir.isNotEmpty()) {
                 folders.add(musicDir)
             }
-            val extra = PreferenceScreen.getPreferences(context)
-                .getString("local_audio_folder_a", null)
+            val extra = Settings.get().main().localAudioFolderA
             if (!extra.isNullOrEmpty()) {
                 folders.add(extra)
             }
@@ -136,7 +134,6 @@ internal class LocalMediaStorage(mRepositoryContext: AppStorages) : AbsStorage(m
             }
             emit(result)
         }
-    }
 
     override val photos: Flow<List<LocalPhoto>>
         get() = flow {
