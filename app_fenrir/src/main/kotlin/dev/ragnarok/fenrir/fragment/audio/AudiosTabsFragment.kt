@@ -77,7 +77,7 @@ class AudiosTabsFragment : BaseFragment(), MenuProvider {
         ) { tab, position ->
             when (val fid = adapter.pFragments[position]) {
                 MY_AUDIO -> tab.text =
-                    getString(R.string.audios_tab_my_music)
+                    getString(R.string.my_saved)
 
                 PLAYLISTS -> tab.text =
                     getString(R.string.playlists)
