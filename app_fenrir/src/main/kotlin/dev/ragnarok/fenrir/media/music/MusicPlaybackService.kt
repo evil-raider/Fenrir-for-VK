@@ -332,6 +332,12 @@ class MusicPlaybackService : MediaSessionService() {
      * показываем об этом уведомление в шторке, чтобы это не выглядело как молчаливый баг
      * воспроизведения. Один общий id уведомления — повторные случаи обновляют его,
      * а не копятся в шторке.
+     *
+     * Текст уведомления явно показывает строку "Artist - Title" — это ровно тот ключ
+     * (без учёта регистра), по которому UnifiedPlaylist.findLocalFallback ищет локальную копию
+     * в папках A/B: либо совпадающие ID3-теги Title/Artist у файла (любое имя файла), либо —
+     * если тегов нет — имя файла ровно в формате "Artist - Title.<ext>" (LocalAudioFolderScanner.mapFile
+     * парсит имя по разделителю " - ").
      */
     internal fun notifyTrackUnavailable(audio: Audio) {
         val manager =
@@ -339,17 +345,19 @@ class MusicPlaybackService : MediaSessionService() {
         manager.createNotificationChannel(AppNotificationChannels.getAudioChannel(this))
         val isRu = Locale.getDefault().language == "ru"
         val title = if (isRu) "Трек недоступен" else "Track unavailable"
-        val artistTitle = "${audio.artist} – ${audio.title}"
+        // "Artist - Title" (обычный дефис, не тире) — именно такой формат ищет
+        // сканер папок A/B в имени файла, если в нём нет ID3-тегов.
+        val expected = "${audio.artist} - ${audio.title}"
         val text = if (isRu) {
-            "$artistTitle: удалён или заблокирован правообладателем в VK, локальной копии не найдено"
+            "$expected: удалён/заблокирован на VK, локальной копии не найдено. Чтобы плеер нашёл файл сам: положите его в папку A или B с тегами Artist=\"${audio.artist}\" и Title=\"${audio.title}\", либо назовите файл \"$expected.mp3\" (точно через \" - \", без тегов имя берётся из имени файла)."
         } else {
-            "$artistTitle: removed or blocked by the rights holder on VK, no local copy found"
+            "$expected: removed/blocked on VK, no local copy found. For the player to find it automatically: put the file into folder A or B with tags Artist=\"${audio.artist}\" and Title=\"${audio.title}\", or name the file \"$expected.mp3\" (exact \" - \" separator, filename is parsed when tags are missing)."
         }
         val notification =
             NotificationCompat.Builder(this, AppNotificationChannels.AUDIO_CHANNEL_ID)
                 .setSmallIcon(R.drawable.song)
                 .setContentTitle(title)
-                .setContentText(text)
+                .setContentText(expected)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                 .setAutoCancel(true)
                 .setContentIntent(NotificationHelper.getAudioPlayerPendingIntent(this))
