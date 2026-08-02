@@ -41,8 +41,10 @@ import java.io.FileOutputStream
  * несколько громких heads-up уведомлений на каждый трек (начало, завершение, теги)
  * плюс тосты — для фонового кэширования это шумно. Здесь — ОДНО тихое уведомление
  * (канал IMPORTANCE_LOW: без звука и всплывающего окна), которое видно только пока
- * идёт скачивание и бесследно убирается по завершении. При ошибке уведомление
- * остаётся в шторке (тоже тихое, закрывается по тапу), чтобы проблему было видно.
+ * идёт скачивание и бесследно убирается по завершении. Если скачать файл не удалось
+ * (трек недоступен онлайн, HLS без нативного модуля, сетевая ошибка) — показываем
+ * ЕДИНОЕ уведомление «отсутствует локальная копия недоступного онлайн файла»
+ * (MissingTrackNotifier), такое же, как в плеере и ночной синхронизации.
  *
  * Логика скачивания повторяет TrackDownloadWorker/FullAudioSyncWorker: дорезолв
  * протухшей ссылки, HLS через M3U8+TSDemuxer (нативный модуль), ID3-теги и обложка,
@@ -93,24 +95,6 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
         notifyManager.notify(NOTIFICATION_ID, builder.build())
     }
 
-    @SuppressLint("MissingPermission")
-    private fun notifyError(text: String) {
-        if (!AppPerms.hasNotificationPermissionSimple(applicationContext)) {
-            return
-        }
-        ensureChannel()
-        val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setContentTitle(applicationContext.getString(R.string.error))
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setSmallIcon(R.drawable.ic_error_toast_vector)
-            .setColor("#ff0000".toColor())
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
-        notifyManager.notify(NOTIFICATION_ID, builder.build())
-    }
-
     private fun cancelNotification() {
         notifyManager.cancel(NOTIFICATION_ID)
     }
@@ -153,7 +137,9 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
 
             val url = audio.url
             if (url.isNullOrEmpty() || audio.isHLS && !FenrirNative.isNativeLoaded) {
+                // Трек недоступен онлайн (или HLS нечем распаковать) — локальной копии не будет.
                 cancelNotification()
+                MissingTrackNotifier.show(applicationContext, audio)
                 return Result.failure()
             }
 
@@ -163,10 +149,9 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
                 downloadRaw(url, target)
             }
             if (!ok) {
-                if (isStopped) {
-                    cancelNotification()
-                } else {
-                    notifyError(trackName)
+                cancelNotification()
+                if (!isStopped) {
+                    MissingTrackNotifier.show(applicationContext, audio)
                 }
                 return Result.failure()
             }
@@ -217,7 +202,8 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
             return Result.success()
         } catch (e: Exception) {
             e.printStackTrace()
-            notifyError(trackName + " (" + e.localizedMessage + ")")
+            cancelNotification()
+            MissingTrackNotifier.show(applicationContext, audio)
             return Result.failure()
         }
     }

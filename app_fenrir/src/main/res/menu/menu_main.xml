@@ -22,6 +22,11 @@
         android:title="@string/drawer_feedback" />
 
     <item
+        android:id="@+id/menu_music"
+        android:icon="@drawable/music"
+        android:title="@string/music" />
+
+    <item
         android:id="@+id/menu_other"
         android:icon="@drawable/ic_menu_24_white"
         android:title="@string/other" />
