@@ -105,7 +105,11 @@ internal class LocalMediaStorage(mRepositoryContext: AppStorages) : AbsStorage(m
             if (!extraB.isNullOrEmpty()) {
                 folders.add(extraB)
             }
-            val ext = Settings.get().main().audioExt
+            // FENRIR-CI: пользовательская настройка "audio_ext" по умолчанию содержит только
+            // mp3/ogg/flac/opus и не рассчитана на офлайн-папки — расширяем набор специально
+            // для сканирования папок A/B/musicDir, не трогая саму настройку "audio_ext",
+            // которая используется и в других местах приложения.
+            val ext = Settings.get().main().audioExt + setOf("m4a", "wav", "aac")
             emit(LocalAudioFolderScanner.scanFolders(accountId, folders, ext))
         }
     }
