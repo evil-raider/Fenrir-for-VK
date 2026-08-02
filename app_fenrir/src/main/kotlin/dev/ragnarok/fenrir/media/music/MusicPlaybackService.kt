@@ -65,6 +65,7 @@ import dev.ragnarok.fenrir.util.DownloadWorkUtils.GetLocalTrackLink
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.makeDownloadRequestAudio
 import dev.ragnarok.fenrir.util.Logger
+import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils
 import dev.ragnarok.fenrir.util.coroutines.CancelableJob
 import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.andThen
@@ -476,6 +477,19 @@ class MusicPlaybackService : MediaSessionService() {
             var res: String? = audio.url
             if (res?.contains("audio_api_unavailable") == true) {
                 res = null
+            }
+            if (res.isNullOrEmpty() && !audio.isLocal && !audio.isLocalServer) {
+                // FENRIR-CI (Этап 3, доводка): трек удалён/заблокирован на VK и не скачан в папку B —
+                // ищем локальную копию по artist+title среди файлов папок A/B (работает и в
+                // отдельных VK-плейлистах, не только в «Моей музыке», см. UnifiedPlaylist).
+                val fallback = UnifiedPlaylist.findLocalFallback(audio)
+                val fallbackUrl = fallback?.url
+                if (!fallbackUrl.isNullOrEmpty()) {
+                    val fallbackPath = fallbackUrl.toUri().path
+                    if (fallbackPath.isNullOrEmpty() || File(fallbackPath).exists()) {
+                        res = fallbackUrl
+                    }
+                }
             }
             val url = Utils.firstNonEmptyString(
                 res,
