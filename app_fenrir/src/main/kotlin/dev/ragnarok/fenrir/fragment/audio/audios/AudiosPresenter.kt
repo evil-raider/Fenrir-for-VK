@@ -74,12 +74,11 @@ class AudiosPresenter(
     override fun onGuiResumed() {
         super.onGuiResumed()
         resolveRefreshingView()
-        doAudioLoadTabs = if (doAudioLoadTabs) {
-            return
-        } else {
-            true
-        }
         if (audios.isEmpty()) {
+            if (doAudioLoadTabs) {
+                return
+            }
+            doAudioLoadTabs = true
             if (!iSSelectMode && playlistId == null) {
                 appendJob(
                     Includes.stores.tempStore().getAudiosAll(ownerId)
@@ -106,6 +105,20 @@ class AudiosPresenter(
                         })
                 )
             } else fireRefresh()
+        } else if (isMyAudio && !iSSelectMode && !loadingNow) {
+            // FENRIR-CI (баг №3, повтор захода на вкладку): раньше здесь стоял
+            // одноразовый флаг doAudioLoadTabs, который навсегда блокировал повторный
+            // вызов этой логики после первого onGuiResumed за время жизни Presenter'а.
+            // Из-за этого локальные файлы из папок A/Б не подхватывались после выдачи
+            // разрешения "Все файлы" уже во время сессии, а прерванная (уходом с вкладки)
+            // фоновая догрузка всего каталога никогда не возобновлялась сама — только
+            // вручную через "Загрузить ещё"/scroll-to-end. Теперь на каждый повторный
+            // заход домердживаем локальные файлы и, если каталог догружен не до конца,
+            // продолжаем фоновую догрузку.
+            mergeLocalUnified()
+            if (!endOfContent) {
+                requestNext()
+            }
         }
     }
 
