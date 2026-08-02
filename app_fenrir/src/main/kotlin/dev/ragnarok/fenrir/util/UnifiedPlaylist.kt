@@ -4,6 +4,7 @@ import dev.ragnarok.fenrir.db.Stores
 import dev.ragnarok.fenrir.model.Audio
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -20,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
  * appendLocalOnly() возвращает только те локальные треки, которых ещё нет в переданном
  * VK-списке (дедуп по "artist|title" без учёта регистра — тот же ключ, что и в
  * AudiosLocalPresenter.mergeKey). VK-треки, у которых есть локальная копия, остаются в списке
- * и проигрываются из локального файла через MusicPlayer.makeMediaSource (приоритет локальной
+ * и проигрывается из локального файла через MusicPlayer.makeMediaSource (приоритет локальной
  * копии, Этап 3/5).
  *
  * findLocalFallback() (доводка Этапа 3) — фолбэк для ОТДЕЛЬНЫХ VK-плейлистов (не «Моя музыка»):
@@ -67,36 +68,28 @@ object UnifiedPlaylist {
         for (a in existing) {
             known.add(mergeKey(a))
         }
-        return mergedLocalSnapshot(accountId)
-            .combine(kotlinx.coroutines.flow.flowOf(Unit)) { locals, _ -> locals }
-            .let { flow ->
-                kotlinx.coroutines.flow.flow {
-                    flow.collect { locals ->
-                        cacheAll(locals)
-                        val extras = ArrayList<Audio>()
-                        for (l in locals) {
-                            if (known.add(mergeKey(l))) {
-                                extras.add(l)
-                            }
-                        }
-                        emit(extras)
-                    }
+        return mergedLocalSnapshot(accountId).map { locals ->
+            cacheAll(locals)
+            val extras = ArrayList<Audio>()
+            for (l in locals) {
+                if (known.add(mergeKey(l))) {
+                    extras.add(l)
                 }
             }
+            extras
+        }
     }
 
     /**
      * Прогревает снимок локальных треков (папки A/B/musicDir + широкий скан устройства) без
      * изменения текущего списка — нужен, чтобы findLocalFallback() работал и в отдельных
      * VK-плейлистах, где appendLocalOnly() не вызывается (там локальные треки не подмешиваются
-     * в список, только используются как фолбэк при недоступности трека).
+     * в список, только используется как фолбэк при недоступности трека).
      */
     fun warmCache(accountId: Long): Flow<List<Audio>> {
-        return kotlinx.coroutines.flow.flow {
-            mergedLocalSnapshot(accountId).collect { locals ->
-                cacheAll(locals)
-                emit(locals)
-            }
+        return mergedLocalSnapshot(accountId).map { locals ->
+            cacheAll(locals)
+            locals
         }
     }
 
