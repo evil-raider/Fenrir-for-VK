@@ -184,4 +184,198 @@ class AudiosPresenter(
             UnifiedPlaylist.appendLocalOnly(accountId, audios)
                 .fromIOToMain({ extras ->
                     if (extras.nonNullNoEmpty()) {
-                        val
+                        val startPos = audios.size
+                        audios.addAll(extras)
+                        view?.notifyDataAdded(startPos, extras.size)
+                    }
+                }) { }
+        )
+    }
+
+    fun playAudio(context: Context, position: Int) {
+        startForPlayList(context, audios, position)
+        if (!Settings.get().main().isShow_mini_player) getPlayerPlace(accountId).tryOpenWith(
+            context
+        )
+    }
+
+    fun fireDelete(position: Int) {
+        audios.removeAt(position)
+        view?.notifyItemRemoved(position)
+    }
+
+    override fun onDestroyed() {
+        audioListDisposable.cancel()
+        swapDisposable.cancel()
+        sleepDataDisposable.cancel()
+        super.onDestroyed()
+    }
+
+    internal fun onListGetError(t: Throwable) {
+        setLoadingNow(false)
+        showError(getCauseIfRuntime(t))
+    }
+
+    fun fireSelectAll() {
+        for (i in audios) {
+            i.isSelected = true
+        }
+        view?.notifyListChanged()
+    }
+
+    fun getSelected(noDownloaded: Boolean): ArrayList<Audio> {
+        val ret = ArrayList<Audio>()
+        for (i in audios) {
+            if (i.isSelected) {
+                if (noDownloaded) {
+                    if (TrackIsDownloaded(i) == 0 && i.url
+                            .nonNullNoEmpty() && !i.url!!.contains("file://") && !i.url!!.contains("content://")
+                    ) {
+                        ret.add(i)
+                    }
+                } else {
+                    ret.add(i)
+                }
+            }
+        }
+        return ret
+    }
+
+    fun getAudioPos(audio: Audio?): Int {
+        if (audios.isNotEmpty() && audio != null) {
+            for ((pos, i) in audios.withIndex()) {
+                if (i.id == audio.id && i.ownerId == audio.ownerId) {
+                    i.isAnimationNow = true
+                    view?.notifyItemChanged(
+                        pos
+                    )
+                    return pos
+                }
+            }
+        }
+        return -1
+    }
+
+    fun fireUpdateSelectMode() {
+        for (i in audios) {
+            if (i.isSelected) {
+                i.isSelected = false
+            }
+        }
+        view?.notifyListChanged()
+    }
+
+    private fun sleep_search(q: String?) {
+        if (loadingNow) return
+        sleepDataDisposable.cancel()
+        if (q.isNullOrEmpty()) {
+            searcher.cancel()
+        } else {
+            if (!searcher.isSearchMode) {
+                searcher.insertCache(audios, audios.size)
+            }
+            sleepDataDisposable += delayTaskFlow(WEB_SEARCH_DELAY.toLong())
+                .toMain { searcher.do_search(q) }
+        }
+    }
+
+    fun fireSearchRequestChanged(q: String?) {
+        sleep_search(q?.trim())
+    }
+
+    fun fireRefresh() {
+        receivedVkCount = 0
+        if (searcher.isSearchMode) {
+            searcher.reset()
+        } else {
+            if (playlistId != null && playlistId != 0) {
+                audioListDisposable.add(
+                    audioInteractor.getPlaylistById(
+                        accountId,
+                        playlistId,
+                        ownerId,
+                        accessKey
+                    )
+                        .fromIOToMain({ t -> loadedPlaylist(t) }) { t ->
+                            showError(
+                                getCauseIfRuntime(t)
+                            )
+                        })
+            }
+            requestList(0, playlistId)
+        }
+    }
+
+    fun onDelete(album: AudioPlaylist) {
+        audioListDisposable.add(
+            audioInteractor.deletePlaylist(
+                accountId,
+                album.id,
+                album.owner_id
+            )
+                .fromIOToMain({
+                    view?.customToast?.showToast(
+                        R.string.success
+                    )
+                }) { throwable ->
+                    showError(throwable)
+                })
+    }
+
+    fun onAdd(album: AudioPlaylist) {
+        audioListDisposable.add(
+            audioInteractor.followPlaylist(
+                accountId,
+                album.id,
+                album.owner_id,
+                album.access_key
+            )
+                .fromIOToMain({
+                    view?.customToast?.showToast(R.string.success)
+                }) { throwable ->
+                    showError(throwable)
+                })
+    }
+
+    fun fireScrollToEnd() {
+        if (audios.nonNullNoEmpty() && !loadingNow && actualReceived) {
+            if (searcher.isSearchMode) {
+                searcher.do_search()
+            } else if (!endOfContent) {
+                requestNext()
+            }
+        }
+    }
+
+    fun fireEditTrack(context: Context, audio: Audio) {
+        val root = View.inflate(context, R.layout.entry_audio_info, null)
+        root.findViewById<TextInputEditText>(R.id.edit_artist).setText(audio.artist)
+        root.findViewById<TextInputEditText>(R.id.edit_title).setText(audio.title)
+        MaterialAlertDialogBuilder(context)
+            .setTitle(R.string.enter_audio_info)
+            .setCancelable(true)
+            .setView(root)
+            .setPositiveButton(R.string.button_ok) { _, _ ->
+                audioListDisposable.add(
+                    audioInteractor.edit(
+                        accountId,
+                        audio.ownerId,
+                        audio.id,
+                        root.findViewById<TextInputEditText>(R.id.edit_artist).text.toString(),
+                        root.findViewById<TextInputEditText>(R.id.edit_title).text.toString()
+                    ).fromIOToMain({ fireRefresh() }) { t ->
+                        showError(getCauseIfRuntime(t))
+                    })
+            }
+            .setNegativeButton(R.string.button_cancel, null)
+            .show()
+    }
+
+    private fun tempSwap(fromPosition: Int, toPosition: Int) {
+        if (fromPosition < toPosition) {
+            for (i in fromPosition until toPosition) {
+                audios.swap(i, i + 1)
+            }
+        } else {
+            for (i in fromPosition downTo toPosition + 1) {
+                audios.swap(i, i - 
