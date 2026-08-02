@@ -158,7 +158,17 @@ class AudiosPresenter(
     }
 
     private fun mergeLocalUnified() {
-        if (!isMyAudio || iSSelectMode || searcher.isSearchMode) {
+        if (iSSelectMode || searcher.isSearchMode) {
+            return
+        }
+        if (!isMyAudio) {
+            // FENRIR-CI (Этап 3, доводка): список отдельного VK-плейлиста не меняем (только
+            // свои треки), но прогреваем снимок локальных файлов A/B, чтобы
+            // MusicPlaybackService.makeMediaSource мог найти локальную копию для
+            // удалённого/заблокированного трека через UnifiedPlaylist.findLocalFallback.
+            audioListDisposable.add(
+                UnifiedPlaylist.warmCache(accountId).fromIOToMain({ }) { }
+            )
             return
         }
         audioListDisposable.add(
