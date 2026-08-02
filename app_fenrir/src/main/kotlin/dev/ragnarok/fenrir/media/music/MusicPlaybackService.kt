@@ -1,7 +1,6 @@
 package dev.ragnarok.fenrir.media.music
 
 import android.annotation.SuppressLint
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -13,7 +12,6 @@ import android.os.IBinder
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.camera.camera2.adapter.future
-import androidx.core.app.NotificationCompat
 import androidx.core.content.edit
 import androidx.core.graphics.scale
 import androidx.core.net.toUri
@@ -67,6 +65,7 @@ import dev.ragnarok.fenrir.settings.Settings
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.GetLocalTrackLink
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
 import dev.ragnarok.fenrir.util.Logger
+import dev.ragnarok.fenrir.util.MissingTrackNotifier
 import dev.ragnarok.fenrir.util.TransparentCacheWorker
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils
@@ -79,7 +78,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.io.File
 import java.lang.ref.WeakReference
-import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.random.Random
 
@@ -328,43 +326,14 @@ class MusicPlaybackService : MediaSessionService() {
     }
 
     /**
-     * FENRIR-CI (доводка): трек удалён/заблокирован правообладателем на VK, и локальной копии
-     * для него не нашлось (плеер играет заглушку audio_error.ogg вместо него) —
-     * показываем об этом уведомление в шторке, чтобы это не выглядело как молчаливый баг
-     * воспроизведения. Один общий id уведомления — повторные случаи обновляют его,
-     * а не копятся в шторке.
-     *
-     * Текст уведомления явно показывает строку "Artist - Title" — это ровно тот ключ
-     * (без учёта регистра), по которому UnifiedPlaylist.findLocalFallback ищет локальную копию
-     * в папках A/B: либо совпадающие ID3-теги Title/Artist у файла (любое имя файла), либо —
-     * если тегов нет — имя файла ровно в формате "Artist - Title.<ext>" (LocalAudioFolderScanner.mapFile
-     * парсит имя по разделителю " - ").
+     * FENRIR-CI: трек удалён/заблокирован на VK, и локальной копии не нашлось
+     * (плеер играет заглушку audio_error.ogg) — показываем ЕДИНОЕ уведомление
+     * «отсутствует локальная копия недоступного онлайн файла» с ожидаемым именем
+     * файла — тот же текст, что при прозрачном кэшировании и ночной синхронизации
+     * (см. MissingTrackNotifier).
      */
     internal fun notifyTrackUnavailable(audio: Audio) {
-        val manager =
-            getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        manager.createNotificationChannel(AppNotificationChannels.getAudioChannel(this))
-        val isRu = Locale.getDefault().language == "ru"
-        val title = if (isRu) "Трек недоступен" else "Track unavailable"
-        // "Artist - Title" (обычный дефис, не тире) — именно такой формат ищет
-        // сканер папок A/B в имени файла, если в нём нет ID3-тегов.
-        val expected = "${audio.artist} - ${audio.title}"
-        val text = if (isRu) {
-            "$expected: удалён/заблокирован на VK, локальной копии не найдено. Чтобы плеер нашёл файл сам: положите его в папку A или B с тегами Artist=\"${audio.artist}\" и Title=\"${audio.title}\", либо назовите файл \"$expected.mp3\" (точно через \" - \", без тегов имя берётся из имени файла)."
-        } else {
-            "$expected: removed/blocked on VK, no local copy found. For the player to find it automatically: put the file into folder A or B with tags Artist=\"${audio.artist}\" and Title=\"${audio.title}\", or name the file \"$expected.mp3\" (exact \" - \" separator, filename is parsed when tags are missing)."
-        }
-        val notification =
-            NotificationCompat.Builder(this, AppNotificationChannels.AUDIO_CHANNEL_ID)
-                .setSmallIcon(R.drawable.song)
-                .setContentTitle(title)
-                .setContentText(expected)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-                .setAutoCancel(true)
-                .setContentIntent(NotificationHelper.getAudioPlayerPendingIntent(this))
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .build()
-        manager.notify(NotificationHelper.FENRIR_TRACK_UNAVAILABLE, notification)
+        MissingTrackNotifier.show(this, audio)
     }
 
     internal fun getRepeatCommand() =
