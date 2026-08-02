@@ -1350,7 +1350,7 @@
     <string name="chat_users_count">%1$d участников</string>
     <string name="display_writing">Показывать набор сообщения собеседником</string>
     <string name="download_directory">Куда скачивать</string>
-    <string name="music_dir">Папка с загруженной музыкой</string>
+    <string name="music_dir">Музыка</string>
     <string name="photo_dir">Фото</string>
     <string name="video_dir">Видео</string>
     <string name="docs_dir">Документы</string>
@@ -1733,7 +1733,4 @@
     <string name="call_reset_description">Последние %1$d цифры звонка</string>
     <string name="retry">Повторить</string>
     <string name="video_play_with_external_player">Играть в стороннем плеере</string>
-    <string name="audios_tab_my_music">Моя музыка+оффлайн</string>
-    <string name="auto_download_music_charging_only_summary">Автоскачивание только при подключённом зарядном устройстве</string>
 </resources>
-
