@@ -1463,7 +1463,6 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
 
             switch("force_cache") {
                 titleRes = R.string.force_cache
-                summaryRes = R.string.force_cache_summary
             }
 
             switch("use_long_click_download") {
