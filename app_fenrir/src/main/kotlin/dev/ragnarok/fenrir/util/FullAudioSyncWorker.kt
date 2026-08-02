@@ -53,6 +53,9 @@ import java.util.concurrent.TimeUnit
  * Воркер сам проходит все страницы «Моей музыки», собирает список ещё не
  * скачанных треков и последовательно скачивает каждый (mp3 + обложка + ID3-теги
  * + регистрация), поддерживая ОДНО foreground-уведомление с прогрессом X / N.
+ * Если трек скачать не удалось (недоступен онлайн и т.п.) — показывается ЕДИНОЕ
+ * уведомление «отсутствует локальная копия недоступного онлайн файла»
+ * (MissingTrackNotifier) — такое же, как в плеере и прозрачном кэшировании.
  * Идемпотентность — TrackIsDownloaded(audio) == 0.
  */
 class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
@@ -197,7 +200,9 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
     /**
      * Скачивает один трек в папку музыки, пишет ID3-теги и обложку и
-     * регистрирует его в реестре скачанного. Без индивидуальных уведомлений.
+     * регистрирует его в реестре скачанного. Если скачать не удалось
+     * (трек недоступен онлайн или ошибка сети) — показывает единое
+     * уведомление «отсутствует локальная копия» (MissingTrackNotifier).
      */
     private fun downloadOne(audio: Audio, accountId: Long) {
         // Дорезолвить ссылку, если требуется (как в TrackDownloadWorker).
@@ -215,6 +220,8 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         }
 
         if (audio.url.isNullOrEmpty()) {
+            // Трек недоступен онлайн — локальной копии не будет, сообщаем ожидаемое имя файла.
+            MissingTrackNotifier.show(applicationContext, audio)
             return
         }
 
@@ -224,6 +231,9 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         val target = File(dir, fileName)
 
         if (!downloadRaw(audio.url, target)) {
+            if (!isStopped) {
+                MissingTrackNotifier.show(applicationContext, audio)
+            }
             return
         }
 
