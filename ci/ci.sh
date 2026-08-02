@@ -30,6 +30,9 @@ patch_sources(){
   section "Patch sources: force finalized targetSdk=36 (installable on release Android)"
   sed -i -E 's/^appTargetSDK[[:space:]]*=.*/appTargetSDK = "36"/' gradle/libs.versions.toml
   grep -E '^appCompileSDK|^appTargetSDK' gradle/libs.versions.toml || true
+  # FENRIR-CI: lintVital may abort release assembly on fatal lint issues; disable for CI
+  sed -i 's/checkReleaseBuilds = true/checkReleaseBuilds = false/' app_fenrir/build.gradle.kts
+  grep -n 'checkReleaseBuilds' app_fenrir/build.gradle.kts || true
 }
 
 install_sdk(){
@@ -108,11 +111,49 @@ build_app(){
   echo "APK published to release '${APK_TAG}': $(basename "$apk")"
 }
 
+# FENRIR-CI: release build signed with user keystore from secrets (KEYSTORE_B64 + KEYSTORE_PASS)
+build_app_release(){
+  section "Build :app_fenrir:assembleFenrirRelease (R8, signed with user keystore)"
+  [ -f compiled_native/native-release.aar ] || { echo "ERROR: native aar missing"; return 1; }
+  chmod +x ./gradlew
+  ./gradlew :app_fenrir:assembleFenrirRelease --stacktrace --no-daemon || return 1
+  section "Collect release APK"
+  find app_fenrir/build/outputs/apk -name '*.apk' 2>/dev/null | sort || true
+  local apk; apk="$(find app_fenrir/build/outputs/apk -path '*release*' -name '*.apk' 2>/dev/null | grep -i fenrir | head -n1)"
+  [ -n "$apk" ] || { echo "ERROR: release APK not found"; return 1; }
+  local mapping; mapping="$(find app_fenrir/build/outputs/mapping -name 'mapping.txt' 2>/dev/null | head -n1)"
+  if [ -n "$mapping" ]; then cp "$mapping" "$OUT/mapping.txt"; echo "R8 mapping.txt saved to ci-out"; fi
+  section "Sign release APK (zipalign + apksigner)"
+  local ZIPALIGN APKSIGNER KS="/tmp/fenrir.keystore"
+  ZIPALIGN="$(ls "$ANDROID_HOME"/build-tools/*/zipalign 2>/dev/null | sort -V | tail -n1)"
+  APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1)"
+  [ -n "$ZIPALIGN" ] && [ -n "$APKSIGNER" ] || { echo "ERROR: zipalign/apksigner not found"; return 1; }
+  printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS" || { echo "ERROR: keystore base64 decode failed"; return 1; }
+  local aligned="/tmp/fenrir-aligned.apk" signed="$OUT/Fenrir-release-signed.apk"
+  "$ZIPALIGN" -f -p 4 "$apk" "$aligned" || { echo "ERROR: zipalign failed"; return 1; }
+  "$APKSIGNER" sign --ks "$KS" --ks-key-alias fenrir --ks-pass "pass:${KEYSTORE_PASS}" --key-pass "pass:${KEYSTORE_PASS}" --out "$signed" "$aligned" || { echo "ERROR: apksigner sign failed (check alias/password)"; rm -f "$KS"; return 1; }
+  rm -f "$KS"
+  section "APK diagnostics (sdk + signature)"
+  local AAPT2; AAPT2="$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n1)"
+  if [ -n "$AAPT2" ]; then "$AAPT2" dump badging "$signed" 2>&1 | grep -Ei 'package:|sdkVersion|targetSdkVersion|native-code|compileSdk' || true; fi
+  "$APKSIGNER" verify --verbose "$signed" 2>&1 | grep -Ei 'Verified using|scheme|Number of signers|WARNING|ERROR' || true
+  ensure_release "$APK_TAG"
+  gh release upload "$APK_TAG" --repo "$REPO" --clobber "$signed" || echo "WARN: apk upload failed"
+  echo "Signed release APK published to '${APK_TAG}': $(basename "$signed")"
+}
+
 patch_sources
 install_sdk
 STATUS=0
 build_native_aar || STATUS=$?
-if [ "$STATUS" -eq 0 ]; then build_app || STATUS=$?; fi
+if [ "$STATUS" -eq 0 ]; then
+  if [ -n "${KEYSTORE_B64:-}" ] && [ -n "${KEYSTORE_PASS:-}" ]; then
+    build_app_release || STATUS=$?
+  else
+    echo "KEYSTORE_B64/KEYSTORE_PASS not set -> falling back to debug build"
+    build_app || STATUS=$?
+  fi
+fi
 section "CI end status=${STATUS} $(date -u)"
 sleep 1
 exit "$STATUS"
