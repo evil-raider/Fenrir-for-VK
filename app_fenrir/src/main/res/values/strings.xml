@@ -1073,7 +1073,6 @@
     <string name="auto_download_music_enable_summary">Automatically download music to offline</string>
     <string name="auto_download_music_wifi_only">Wi-Fi only</string>
     <string name="auto_download_music_charging_only">Only while charging</string>
-    <string name="auto_download_music_charging_only_summary">Sync only when the device is plugged in</string>
     <string name="local_audio_folder_b">Folder with local music (download folder)</string>
     <string name="scheduled">Scheduled</string>
     <string name="all_posts">All posts</string>
