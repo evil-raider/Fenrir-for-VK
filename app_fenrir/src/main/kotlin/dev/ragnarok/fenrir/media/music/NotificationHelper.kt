@@ -19,4 +19,8 @@ object NotificationHelper {
     }
 
     const val FENRIR_MUSIC_SERVICE = 1
+
+    // FENRIR-CI: id уведомления «трек недоступен онлайн и нет локальной копии» — общий на все
+    // такие случаи, чтобы повторные срабатывания обновляли одно уведомление, а не копились в шторке.
+    const val FENRIR_TRACK_UNAVAILABLE = 2
 }

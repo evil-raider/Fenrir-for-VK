@@ -1,6 +1,7 @@
 package dev.ragnarok.fenrir.media.music
 
 import android.annotation.SuppressLint
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -12,6 +13,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.camera.camera2.adapter.future
+import androidx.core.app.NotificationCompat
 import androidx.core.content.edit
 import androidx.core.graphics.scale
 import androidx.core.net.toUri
@@ -76,6 +78,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.io.File
 import java.lang.ref.WeakReference
+import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.random.Random
 
@@ -321,6 +324,38 @@ class MusicPlaybackService : MediaSessionService() {
     internal fun notifyChange(what: String) {
         if (Constants.IS_DEBUG) Logger.d(TAG, "notifyChange: what = $what")
         MusicPlaybackController.publishFromServiceState(what)
+    }
+
+    /**
+     * FENRIR-CI (доводка): трек удалён/заблокирован правообладателем на VK, и локальной копии
+     * для него не нашлось (плеер играет заглушку audio_error.ogg вместо него) —
+     * показываем об этом уведомление в шторке, чтобы это не выглядело как молчаливый баг
+     * воспроизведения. Один общий id уведомления — повторные случаи обновляют его,
+     * а не копятся в шторке.
+     */
+    internal fun notifyTrackUnavailable(audio: Audio) {
+        val manager =
+            getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        manager.createNotificationChannel(AppNotificationChannels.getAudioChannel(this))
+        val isRu = Locale.getDefault().language == "ru"
+        val title = if (isRu) "Трек недоступен" else "Track unavailable"
+        val artistTitle = "${audio.artist} – ${audio.title}"
+        val text = if (isRu) {
+            "$artistTitle: удалён или заблокирован правообладателем в VK, локальной копии не найдено"
+        } else {
+            "$artistTitle: removed or blocked by the rights holder on VK, no local copy found"
+        }
+        val notification =
+            NotificationCompat.Builder(this, AppNotificationChannels.AUDIO_CHANNEL_ID)
+                .setSmallIcon(R.drawable.song)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setAutoCancel(true)
+                .setContentIntent(NotificationHelper.getAudioPlayerPendingIntent(this))
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build()
+        manager.notify(NotificationHelper.FENRIR_TRACK_UNAVAILABLE, notification)
     }
 
     internal fun getRepeatCommand() =
@@ -734,6 +769,15 @@ class MusicPlaybackService : MediaSessionService() {
                         val accountId = Settings.get().accounts().current
                         val audio = mediaItem?.localConfiguration?.tag as? Audio
                         if (audio != null && !Utils.isHiddenAccount(accountId) && !audio.isLocalServer && !audio.isLocal) {
+                            // FENRIR-CI (доводка): трек недоступен онлайн (удалён/заблокирован) и локальной
+                            // копии не нашлось — makeMediaSource подставила заглушку audio_error.ogg.
+                            // Показываем уведомление именно в момент перехода на этот трек, а не при
+                            // построении очереди (setSources строит источники для ВСЕХ треков сразу).
+                            if (mediaItem.localConfiguration?.uri?.toString()
+                                    ?.contains("audio_error.ogg") == true
+                            ) {
+                                mService.get()?.notifyTrackUnavailable(audio)
+                            }
                             // FENRIR-CI: transparent caching — сохраняем проигрываемый онлайн-трек в папку VK и регистрируем его
                             if (Settings.get().main().isForce_cache
                                 && !audio.isHLS
