@@ -2,212 +2,61 @@ package dev.ragnarok.fenrir.fragment.audio.catalog_v2.lists
 
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
+import com.google.gson.reflect.TypeToken
+import dev.ragnarok.fenrir.Constants
 import dev.ragnarok.fenrir.R
-import dev.ragnarok.fenrir.activity.SendAttachmentsActivity.Companion.startForSendAttachments
+import dev.ragnarok.fenrir.api.model.VKApiAudio
 import dev.ragnarok.fenrir.domain.IAudioInteractor
 import dev.ragnarok.fenrir.domain.InteractorFactory
-import dev.ragnarok.fenrir.fragment.base.AccountDependencyPresenter
-import dev.ragnarok.fenrir.ifNonNullNoEmpty
-import dev.ragnarok.fenrir.model.AudioArtist
-import dev.ragnarok.fenrir.model.catalog_v2_audio.CatalogV2List
-import dev.ragnarok.fenrir.model.catalog_v2_audio.CatalogV2SortListCategory
-import dev.ragnarok.fenrir.model.catalog_v2_audio.CatalogV2SortListCategory.Companion.TYPE_AUDIO
-import dev.ragnarok.fenrir.model.catalog_v2_audio.CatalogV2SortListCategory.Companion.TYPE_CATALOG
-import dev.ragnarok.fenrir.model.catalog_v2_audio.CatalogV2SortListCategory.Companion.TYPE_LOCAL_AUDIO
-import dev.ragnarok.fenrir.model.catalog_v2_audio.CatalogV2SortListCategory.Companion.TYPE_LOCAL_SERVER_AUDIO
-import dev.ragnarok.fenrir.model.catalog_v2_audio.CatalogV2SortListCategory.Companion.TYPE_PLAYLIST
-import dev.ragnarok.fenrir.model.catalog_v2_audio.CatalogV2SortListCategory.Companion.TYPE_RECOMMENDATIONS
-import dev.ragnarok.fenrir.nonNullNoEmpty
-import dev.ragnarok.fenrir.orZero
+import dev.ragnarok.fenrir.fragment.audio.catalog_v2.atalog_v2_audio_api
+import dev.ragnarok.fenrir.fragment.audio.catalog_v2.atalog_v2_lists_bolno
+import dev.ragnarok.fenrir.fragment.audio.catalog_v2.atalog_v2_lists_recommended
+import dev.ragnarok.fenrir.fragment.audio.catalog_v2.atalog_v2_lists_similar_audios
+import dev.ragnarok.fenrir.fragment.audio.catalog_v2.atalog_v2_lists_similar_artist
+import dev.ragnarok.fenrir.fragment.audio.catalog_v2.atalog_v2_lists_single_artist
+import dev.ragnarok.fenrir.fragment.audio.catalog_v2.atalog_v2_lists_top_audios_by_artist
+import dev.ragnarok.fenrir.fragment.local_server.ILocalServerInteractor
+import dev.ragnarok.fenrir.fragment.local_server.LocalServerFragment
+import dev.ragnarok.fenrir.fragment.search.OptionsFragment
+import dev.ragnarok.fenrir.fragment.search.criteria.AudioSearchCriteria
+import dev.ragnarok.fenrir.model.Audio
+import dev.ragnarok.fenrir.model.CatalogV2ListCategory
+import dev.ragnarok.fenrir.model.EditingPostType
+import dev.ragnarok.fenrir.model.PostAvailability
+import dev.ragnarok.fenrir.mvp.core.AbsPresenter
+import dev.ragnarok.fenrir.mvp.core.IMvpView
+import dev.ragnarok.fenrir.mvp.presenter.Exporter
+import dev.ragnarok.fenrir.mvp.view.IBasicListView
+import dev.ragnarok.fenrir.mvp.view.ICatalogV2ListView
+import dev.ragnarok.fenrir.place.PlaceFactory
+import dev.ragnarok.fenrir.player.AggregateAudioPlaylist
+import dev.ragnarok.fenrir.player.AudioAndPlayerServiceController
+import dev.ragnarok.fenrir.player.MouseDevice
+import dev.ragnarok.fenrir.player.PlayerAnnotation
+import dev.ragnarok.fenrir.settings.CurrentTheme
 import dev.ragnarok.fenrir.settings.Settings
-import dev.ragnarok.fenrir.util.coroutines.CompositeJob
-import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.fromIOToMain
-
-class CatalogV2ListPresenter(
-    accountId: Long,
-    private val owner_id: Long,
-    private val artist_id: String?,
-    private val query: String?,
-    private val url: String?,
-    context: Context,
-    savedInstanceState: Bundle?
-) : AccountDependencyPresenter<ICatalogV2ListView>(accountId, savedInstanceState) {
-    private val audioInteractor: IAudioInteractor = InteractorFactory.createAudioInteractor()
-    private val mSections: ArrayList<CatalogV2List.CatalogV2ListItem> =
-        ArrayList()
-    private val netDisposable = CompositeJob()
-    private var netLoadingNow = false
-
-    private val resolv = HashMap<Int, String>()
-
-    fun resolveLoading() {
-        view?.resolveLoading(netLoadingNow)
-    }
-
-    fun fireRepost(context: Context) {
-        if (artist_id.isNullOrEmpty()) {
-            return
-        }
-        netDisposable.add(
-            audioInteractor.getArtistById(accountId, artist_id).fromIOToMain({ artistInfo ->
-                artistInfo.id.ifNonNullNoEmpty({
-                    startForSendAttachments(context, accountId, AudioArtist(it))
-                }, {
-                    startForSendAttachments(context, accountId, AudioArtist(artist_id))
-                })
-            }, {
-                startForSendAttachments(context, accountId, AudioArtist(artist_id))
-            })
-        )
-    }
-
-    override fun onDestroyed() {
-        netDisposable.cancel()
-        super.onDestroyed()
-    }
-
-    private fun request() {
-        netLoadingNow = true
-        resolveLoading()
-        netDisposable.add(
-            audioInteractor.getCatalogV2Sections(
-                accountId,
-                owner_id,
-                artist_id,
-                url,
-                query,
-                null
-            )
-                .fromIOToMain({ sections ->
-                    onNetDataReceived(
-                        sections
-                    )
-                }) { t -> onNetDataGetError(t) })
-    }
-
-    private fun onNetDataGetError(t: Throwable) {
-        mSections.clear()
-        val srt = Settings.get().main().catalogV2ListSort
-        for (i in srt) {
-            makeByUid(i, null)
-        }
-        view?.notifyDataSetChanged()
-        netLoadingNow = false
-        resolveLoading()
-        showError(t)
-    }
-
-    private fun makeByUid(
-        @CatalogV2SortListCategory n: Int,
-        catalogSections: List<CatalogV2List.CatalogV2ListItem>?
-    ) {
-        if ((artist_id.nonNullNoEmpty() || query.nonNullNoEmpty() || url.nonNullNoEmpty()) && n != TYPE_CATALOG) {
-            return
-        }
-        when (n) {
-            TYPE_AUDIO -> {
-                mSections.add(
-                    CatalogV2List.CatalogV2ListItem(
-                        TYPE_AUDIO,
-                        resolv[R.string.my_saved].orEmpty()
-                    )
-                )
-            }
-
-            TYPE_CATALOG -> {
-                if (catalogSections != null) {
-                    mSections.addAll(catalogSections)
-                }
-            }
-
-            TYPE_LOCAL_AUDIO -> {
-                if (accountId == owner_id) {
-                    mSections.add(
-                        CatalogV2List.CatalogV2ListItem(
-                            TYPE_LOCAL_AUDIO,
-                            resolv[R.string.local_audios].orEmpty()
-                        )
-                    )
-                }
-            }
-
-            TYPE_LOCAL_SERVER_AUDIO -> {
-                if (accountId == owner_id && accountId >= 0 && Settings.get()
-                        .main().localServer.enabled
-                ) {
-                    mSections.add(
-                        CatalogV2List.CatalogV2ListItem(
-                            TYPE_LOCAL_SERVER_AUDIO,
-                            resolv[R.string.on_server].orEmpty()
-                        )
-                    )
-                }
-            }
-
-            TYPE_PLAYLIST -> {
-                mSections.add(
-                    CatalogV2List.CatalogV2ListItem(
-                        TYPE_PLAYLIST,
-                        resolv[R.string.playlists].orEmpty()
-                    )
-                )
-            }
-
-            TYPE_RECOMMENDATIONS -> {
-                mSections.add(
-                    CatalogV2List.CatalogV2ListItem(
-                        TYPE_RECOMMENDATIONS,
-                        resolv[R.string.recommendation].orEmpty()
-                    )
-                )
-            }
-        }
-    }
-
-    private fun onNetDataReceived(data: CatalogV2List) {
-        netLoadingNow = false
-        resolveLoading()
-        mSections.clear()
-        val srt = Settings.get().main().catalogV2ListSort
-        for (i in srt) {
-            makeByUid(i, data.sections)
-        }
-        var pos = 0
-        for (i in 0 until data.sections?.size.orZero()) {
-            if (query.nonNullNoEmpty() && data.sections?.get(i)?.title.isNullOrEmpty()) {
-                data.sections?.get(i)?.updateTitle(query)
-            }
-            if (data.sections?.get(i)?.id == data.default_section) {
-                pos = i
-                break
-            }
-        }
-        view?.notifyDataSetChanged()
-        if (srt[0] == TYPE_CATALOG) {
-            view?.setSection(pos)
-        }
-    }
-
-    override fun onGuiCreated(viewHost: ICatalogV2ListView) {
-        super.onGuiCreated(viewHost)
-        viewHost.displayData(mSections)
-        resolveLoading()
-    }
-
-    fun fireRefresh() {
-        netDisposable.clear()
-        netLoadingNow = false
-        resolveLoading()
-        request()
-    }
-
-    init {
-        resolv[R.string.my_saved] = context.getString(R.string.my_saved)
-        resolv[R.string.local_audios] = context.getString(R.string.local_audios)
-        resolv[R.string.on_server] = context.getString(R.string.on_server)
-        resolv[R.string.playlists] = context.getString(R.string.playlists)
-        resolv[R.string.recommendation] = context.getString(R.string.recommendation)
-
-        request()
-    }
-}
+import dev.ragnarok.fenrir.task.ThreadingExecutors
+import dev.ragnarok.fenrir.upload.Upload
+import dev.ragnarok.fenrir.util.AppPerms.hasReadAudioPermission
+import dev.ragnarok.fenrir.util.AppTextUtils
+import dev.ragnarok.fenrir.util.Convertor"
+import dev.ragnarok.fenrir.util.PersistentLogger
+import dev.ragnarok.fenrir.util.PersistentLogger.createLogsDir
+import dev.ragnarok.fenrir.util.PersistentLogger.sendLogs
+import dev.ragnarok.fenrir.util.PersistentLogger.uploadLogs
+import dev.ragnarok.fenrir.util.PersistentLogger.uploadLogsNoAuth
+import dev.ragnarok.fenrir.util.RxUtils
+import dev.ragnarok.fenrir.util.UnifiedPlaylist
+import dev.ragnarok.fenrir.util.Utils
+import dev.ragnarok.fenrir.util.Utils.createPublishSubject
+import dev.ragnarok.fenrir.util.Utils.emptyString
+import dev.ragnarok.fenrir.util.Utils.firstNonEmptyString
+import dev.ragnarok.fenrir.util.Utils.getCauseIfRuntime
+import dev.ragnarok.fenrir.util.Utils.listEmptyIfNull
+import dev.ragnarok.fenrir.util.Utils.needClose
+import dev.ragnarok.fenrir.util.Utils.safelyClose
+import dev.ragnarok.fenrir.util.Utils.safelyClose
+import dev.ragnarok.fenrir.util.Utils.safelyClose
+import dev.ragnarok.fenrir.util.Utils.stringEmptyIfNull
+import dev.ragnarok.fenrir.util.Utils.toast"}, {
