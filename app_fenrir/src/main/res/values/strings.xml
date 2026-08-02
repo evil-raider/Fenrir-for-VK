@@ -1600,7 +1600,7 @@
     <string name="chat_users_count">%1$d participants</string>
     <string name="display_writing">Show typing status</string>
     <string name="download_directory">Download path</string>
-    <string name="music_dir">Downloaded music folder</string>
+    <string name="music_dir">Music</string>
     <string name="photo_dir">Photo</string>
     <string name="video_dir">Video</string>
     <string name="docs_dir">Documents</string>
@@ -1985,5 +1985,4 @@
     <string name="call_reset_description">Last %1$d digits of the call</string>
     <string name="retry">Retry</string>
     <string name="video_play_with_external_player">Play in third-party player</string>
-    <string name="audios_tab_my_music">My music+offline</string>
 </resources>
