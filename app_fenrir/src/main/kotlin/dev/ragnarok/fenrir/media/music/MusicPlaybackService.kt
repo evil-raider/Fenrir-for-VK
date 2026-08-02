@@ -66,8 +66,8 @@ import dev.ragnarok.fenrir.picasso.PicassoInstance
 import dev.ragnarok.fenrir.settings.Settings
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.GetLocalTrackLink
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
-import dev.ragnarok.fenrir.util.DownloadWorkUtils.makeDownloadRequestAudio
 import dev.ragnarok.fenrir.util.Logger
+import dev.ragnarok.fenrir.util.TransparentCacheWorker
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils
 import dev.ragnarok.fenrir.util.coroutines.CancelableJob
@@ -790,13 +790,16 @@ class MusicPlaybackService : MediaSessionService() {
                             // FENRIR-CI: transparent caching — сохраняем проигрываемый онлайн-трек в папку VK и регистрируем его
                             // FENRIR-CI (fix): 1) раньше стояло условие !audio.isHLS, из-за которого кэширование
                             // молча пропускало ВСЕ HLS-треки (index.m3u8) — а VK отдаёт большинство треков именно
-                            // как HLS. TrackDownloadWorker умеет качать HLS (M3U8+TSDemuxer) при загруженном
+                            // как HLS. Воркер умеет качать HLS (M3U8+TSDemuxer) при загруженном
                             // нативном модуле, а при включённом api 5.90 сам перезапрашивает прямую mp3-ссылку,
                             // поэтому HLS пропускаем только когда его реально нечем скачать.
                             // 2) проверка TrackIsDownloaded == 0 опиралась на кэш имён в памяти (CachedAudios/
                             // RemoteAudios), который бывает устаревшим или ложноположительным (совпадение
                             // "Artist - Title", смена папки, удаление файла мимо приложения) — заменена на
                             // реальную проверку наличия файла на диске, как в makeMediaSource выше.
+                            // 3) кэширование идёт через тихий TransparentCacheWorker (одно беззвучное
+                            // уведомление на время скачивания, убирается по завершении) вместо штатного
+                            // TrackDownloadWorker с его громкими heads-up уведомлениями на каждый трек.
                             if (Settings.get().main().isForce_cache
                                 && (!audio.isHLS || FenrirNative.isNativeLoaded || Settings.get()
                                     .main().isUse_api_5_90_for_audio)
@@ -809,7 +812,7 @@ class MusicPlaybackService : MediaSessionService() {
                                             .enqueueUniqueWork(
                                                 "transparent_cache_${audio.ownerId}_${audio.id}",
                                                 ExistingWorkPolicy.KEEP,
-                                                makeDownloadRequestAudio(audio, accountId)
+                                                TransparentCacheWorker.makeRequest(audio, accountId)
                                             )
                                     } catch (_: Exception) {
                                     }
