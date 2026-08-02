@@ -1533,7 +1533,7 @@ open class MainActivity : AppCompatActivity(), NavigationDrawerCallbacks, OnSect
             Place.COMMUNITIES -> {
                 val communitiesFragment = CommunitiesFragment.newInstance(
                     args.getLong(Extra.ACCOUNT_ID),
-                    args.getLong(Extra.USER_ID)
+                    args.getLong(Extra.OWNER_ID)
                 )
                 attachToFront(communitiesFragment)
             }
