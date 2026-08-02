@@ -849,11 +849,12 @@ internal class MainSettings(context: Context) : IMainSettings {
 
     override var catalogV2ListSort: List<Int>
         get() {
+            // FENRIR-CI: «Моя музыка+оффлайн» перенесена в начало списка вкладок по просьбе Yu.
             val defaults = listOf(
+                CatalogV2SortListCategory.TYPE_AUDIO,
                 CatalogV2SortListCategory.TYPE_CATALOG,
                 CatalogV2SortListCategory.TYPE_LOCAL_AUDIO,
                 CatalogV2SortListCategory.TYPE_LOCAL_SERVER_AUDIO,
-                CatalogV2SortListCategory.TYPE_AUDIO,
                 CatalogV2SortListCategory.TYPE_PLAYLIST,
                 CatalogV2SortListCategory.TYPE_RECOMMENDATIONS
             )
