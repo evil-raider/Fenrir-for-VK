@@ -1228,6 +1228,7 @@
     <string name="pause">пауза</string>
     <string name="family">Семья</string>
     <string name="force_cache">Принудительно слушать из загрузок</string>
+    <string name="force_cache_summary">Также включает автоскачивание онлайн-трека в папку загрузки музыки при его прослушивании</string>
     <string name="activity_until_now">текущее время</string>
     <string name="direction">Направление</string>
     <string name="toast_comment_sent">Комментарий был опубликован!</string>
