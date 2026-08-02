@@ -59,6 +59,7 @@ import dev.ragnarok.fenrir.domain.InteractorFactory
 import dev.ragnarok.fenrir.getParcelableArrayListExtraCompat
 import dev.ragnarok.fenrir.longpoll.AppNotificationChannels
 import dev.ragnarok.fenrir.model.Audio
+import dev.ragnarok.fenrir.module.FenrirNative
 import dev.ragnarok.fenrir.nonNullNoEmpty
 import dev.ragnarok.fenrir.orZero
 import dev.ragnarok.fenrir.picasso.PicassoInstance
@@ -787,19 +788,31 @@ class MusicPlaybackService : MediaSessionService() {
                                 mService.get()?.notifyTrackUnavailable(audio)
                             }
                             // FENRIR-CI: transparent caching — сохраняем проигрываемый онлайн-трек в папку VK и регистрируем его
+                            // FENRIR-CI (fix): 1) раньше стояло условие !audio.isHLS, из-за которого кэширование
+                            // молча пропускало ВСЕ HLS-треки (index.m3u8) — а VK отдаёт большинство треков именно
+                            // как HLS. TrackDownloadWorker умеет качать HLS (M3U8+TSDemuxer) при загруженном
+                            // нативном модуле, а при включённом api 5.90 сам перезапрашивает прямую mp3-ссылку,
+                            // поэтому HLS пропускаем только когда его реально нечем скачать.
+                            // 2) проверка TrackIsDownloaded == 0 опиралась на кэш имён в памяти (CachedAudios/
+                            // RemoteAudios), который бывает устаревшим или ложноположительным (совпадение
+                            // "Artist - Title", смена папки, удаление файла мимо приложения) — заменена на
+                            // реальную проверку наличия файла на диске, как в makeMediaSource выше.
                             if (Settings.get().main().isForce_cache
-                                && !audio.isHLS
-                                && TrackIsDownloaded(audio) == 0
+                                && (!audio.isHLS || FenrirNative.isNativeLoaded || Settings.get()
+                                    .main().isUse_api_5_90_for_audio)
                                 && audio.url?.contains("audio_api_unavailable") != true
                             ) {
-                                try {
-                                    WorkManager.getInstance(Includes.provideApplicationContext())
-                                        .enqueueUniqueWork(
-                                            "transparent_cache_${audio.ownerId}_${audio.id}",
-                                            ExistingWorkPolicy.KEEP,
-                                            makeDownloadRequestAudio(audio, accountId)
-                                        )
-                                } catch (_: Exception) {
+                                val localPath = GetLocalTrackLink(audio)?.toUri()?.path
+                                if (localPath.isNullOrEmpty() || !File(localPath).exists()) {
+                                    try {
+                                        WorkManager.getInstance(Includes.provideApplicationContext())
+                                            .enqueueUniqueWork(
+                                                "transparent_cache_${audio.ownerId}_${audio.id}",
+                                                ExistingWorkPolicy.KEEP,
+                                                makeDownloadRequestAudio(audio, accountId)
+                                            )
+                                    } catch (_: Exception) {
+                                    }
                                 }
                             }
                             var single = audioInteractor.trackEvents(
