@@ -1600,7 +1600,7 @@
     <string name="chat_users_count">%1$d participants</string>
     <string name="display_writing">Show typing status</string>
     <string name="download_directory">Download path</string>
-    <string name="music_dir">Music</string>
+    <string name="music_dir">Downloaded music folder</string>
     <string name="photo_dir">Photo</string>
     <string name="video_dir">Video</string>
     <string name="docs_dir">Documents</string>
