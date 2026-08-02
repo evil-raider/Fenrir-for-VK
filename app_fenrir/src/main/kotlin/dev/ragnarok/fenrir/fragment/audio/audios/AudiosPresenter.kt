@@ -91,6 +91,7 @@ class AudiosPresenter(
                                 actualReceived = true
                                 setLoadingNow(false)
                                 view?.notifyListChanged()
+                                mergeLocalUnified()
                             }
                         }, {
                             fireRefresh()
