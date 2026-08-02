@@ -1330,7 +1330,10 @@ open class MainActivity : AppCompatActivity(), NavigationDrawerCallbacks, OnSect
                 AbsNavigationView.PAGE_NOTIFICATION -> mBottomNavigation?.menu?.get(3)?.isChecked =
                     true
 
-                else -> mBottomNavigation?.menu?.get(4)?.isChecked = true
+                AbsNavigationView.PAGE_MUSIC -> mBottomNavigation?.menu?.get(4)?.isChecked =
+                    true
+
+                else -> mBottomNavigation?.menu?.get(5)?.isChecked = true
             }
         }
         mCurrentFrontSection = sectionDrawerItem
@@ -1949,6 +1952,11 @@ open class MainActivity : AppCompatActivity(), NavigationDrawerCallbacks, OnSect
 
             R.id.menu_feedback -> {
                 openPageAndCloseSheet(AbsNavigationView.SECTION_ITEM_FEEDBACK)
+                return true
+            }
+
+            R.id.menu_music -> {
+                openPageAndCloseSheet(AbsNavigationView.SECTION_ITEM_AUDIOS)
                 return true
             }
 
