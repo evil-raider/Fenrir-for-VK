@@ -99,6 +99,9 @@ class SettingsBackup {
         var force_cache: Boolean? = null
         var auto_download_music_enable: Boolean? = null
         var auto_download_music_wifi_only: Boolean? = null
+        var auto_download_music_charging_only: Boolean? = null
+        var local_audio_folder_a: String? = null
+        var local_audio_folder_b: String? = null
         var disable_history: Boolean? = null
         var show_wall_cover: Boolean? = null
         var custom_chat_color: Int? = null
