@@ -8,6 +8,7 @@ import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ForegroundInfo
@@ -37,9 +38,15 @@ import dev.ragnarok.fenrir.util.hls.M3U8
 import kotlinx.coroutines.flow.map
 import okhttp3.Request
 import java.io.BufferedInputStream
+import java.io.BufferedWriter
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FileWriter
+import java.io.Writer
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
@@ -59,6 +66,11 @@ import java.util.concurrent.TimeUnit
  * уведомление «отсутствует локальная копия недоступного онлайн файла»
  * (MissingTrackNotifier) — такое же, как в плеере и прозрачном кэшировании.
  * Идемпотентность — TrackIsDownloaded(audio) == 0.
+ *
+ * DEBUG (диагностика '100/506'): весь прогон пишется в logcat (тег
+ * FullAudioSync) и в файл на устройстве (getExternalFilesDir/full_sync_debug_*.log)
+ * с построчным flush. Логика скачивания и пагинации при этом НЕ изменена —
+ * добавлено только логирование, чтобы за один ночной проход увидеть причину.
  */
 class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     Worker(context, workerParams) {
@@ -67,6 +79,68 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
     // Канал уведомлений создаём один раз за запуск воркера, а не на каждый тик прогресса.
     private var channelCreated = false
+
+    // --- DEBUG logging infra ------------------------------------------------
+    private val logTimeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    private var logWriter: Writer? = null
+
+    private fun openLog() {
+        try {
+            val dir = applicationContext.getExternalFilesDir(null) ?: applicationContext.filesDir
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val f = File(dir, "full_sync_debug_$stamp.log")
+            logWriter = BufferedWriter(FileWriter(f, true))
+            Log.i(LOG_TAG, "Debug log file: " + f.absolutePath)
+            log("=== FullAudioSyncWorker debug log started ===")
+            log("logfile=" + f.absolutePath)
+            log(
+                "settings: autoDownload=" + Settings.get().main().isAutoDownload_music +
+                    ", wifiOnly=" + Settings.get().main().isAutoDownload_music_wifi_only +
+                    ", chargingOnly=" + Settings.get().main().isAutoDownload_music_charging_only +
+                    ", use_api_5_90=" + Settings.get().main().isUse_api_5_90_for_audio +
+                    ", nativeLoaded=" + FenrirNative.isNativeLoaded +
+                    ", musicDir=" + Settings.get().main().musicDir
+            )
+        } catch (e: Throwable) {
+            Log.e(LOG_TAG, "Cannot open debug log file", e)
+        }
+    }
+
+    private fun log(msg: String) {
+        Log.d(LOG_TAG, msg)
+        try {
+            val w = logWriter ?: return
+            w.write(logTimeFmt.format(Date()) + "  " + msg + "\n")
+            w.flush()
+        } catch (_: Throwable) {
+            // Логирование не должно влиять на скачивание.
+        }
+    }
+
+    private fun closeLog() {
+        try {
+            logWriter?.flush()
+            logWriter?.close()
+        } catch (_: Throwable) {
+        }
+        logWriter = null
+    }
+
+    /** Классификация ссылки трека для диагностики (без раскрытия токенов в имени класса). */
+    private fun classifyUrl(url: String?): String {
+        return when {
+            url.isNullOrEmpty() -> "EMPTY"
+            url.contains("audio_api_unavailable") -> "API_UNAVAILABLE"
+            url.contains("index.m3u8") -> "HLS"
+            url.contains("file://") || url.contains("content://") -> "LOCAL"
+            else -> "DIRECT"
+        }
+    }
+
+    private fun inc(map: HashMap<String, Int>, key: String) {
+        map[key] = (map[key] ?: 0) + 1
+    }
+    // -----------------------------------------------------------------------
 
     private fun ensureChannel() {
         if (channelCreated) {
@@ -126,22 +200,41 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     }
 
     override fun doWork(): Result {
+        openLog()
+        try {
+            return doWorkInner()
+        } catch (e: Throwable) {
+            log("FATAL in doWork: " + e.message)
+            e.printStackTrace()
+            return Result.success()
+        } finally {
+            log("=== FullAudioSyncWorker debug log finished (isStopped=" + isStopped + ") ===")
+            closeLog()
+        }
+    }
+
+    private fun doWorkInner(): Result {
         // Автоскачивание выключено — тихо выходим.
         if (!Settings.get().main().isAutoDownload_music) {
+            log("GATE: autoDownload disabled -> exit")
             return Result.success()
         }
         val accountId = Settings.get().accounts().current
         if (accountId == ISettings.IAccountsSettings.INVALID_ID) {
+            log("GATE: invalid account -> exit")
             return Result.success()
         }
+        log("accountId=" + accountId)
         // Условие Wi-Fi (если включено «только по Wi-Fi») — иначе пропускаем до следующих суток.
         if (Settings.get().main().isAutoDownload_music_wifi_only && !isWifiConnected()) {
+            log("GATE: wifiOnly but no wifi -> exit")
             return Result.success()
         }
         // Условие зарядки — опциональное (по умолчанию требуется). Управляется
         // тумблером auto_download_music_charging_only в настройках. Если включено
         // и питания нет — не тратим заряд, пробуем через сутки.
         if (Settings.get().main().isAutoDownload_music_charging_only && !isCharging()) {
+            log("GATE: chargingOnly but not charging -> exit")
             return Result.success()
         }
 
@@ -151,52 +244,109 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         // Пагинация завершается только через data.isEmpty() — VK может вернуть меньше
         // PAGE_COUNT треков на промежуточной странице (скрытые правообладателями),
         // поэтому break по data.size < PAGE_COUNT был бы преждевременным.
+        log("=== PHASE 1: scanning My Music (PAGE_COUNT=" + PAGE_COUNT + ", MAX_PAGES=" + MAX_PAGES + ") ===")
         val toDownload = ArrayList<Audio>()
+        val toDownloadIdx = ArrayList<Int>()
         var offset = 0
         var page = 0
+        var globalIndex = 0
+        var scanned = 0
+        var alreadyDownloaded = 0
+        var localSkipped = 0
+        var firstNonPlayableIndex = -1
+        val classCounts = HashMap<String, Int>()
         while (page < MAX_PAGES && !isStopped) {
             val data: List<Audio> =
                 audioInteractor[accountId, null, accountId, offset, PAGE_COUNT, null]
                     .syncSingleSafe(emptyList())
+            log("page=" + page + " offset=" + offset + " returned=" + data.size)
             if (data.isEmpty()) {
+                log("page returned empty -> stop paging")
                 break
             }
             for (audio in data) {
                 val url = audio.url
+                val cls = classifyUrl(url)
+                inc(classCounts, cls)
                 val isLocalFile =
                     url != null && (url.contains("file://") || url.contains("content://"))
+                val dl = TrackIsDownloaded(audio)
+                if (firstNonPlayableIndex < 0 && (cls == "EMPTY" || cls == "API_UNAVAILABLE")) {
+                    firstNonPlayableIndex = globalIndex
+                }
+                log(
+                    "  [" + globalIndex + "] cls=" + cls + " isHLS=" + audio.isHLS +
+                        " downloaded=" + dl + " local=" + audio.isLocal + "/" + audio.isLocalServer +
+                        "/" + isLocalFile + " \"" + audio.artist + " - " + audio.title + "\""
+                )
                 if (!audio.isLocal && !audio.isLocalServer && !isLocalFile &&
-                    TrackIsDownloaded(audio) == 0
+                    dl == 0
                 ) {
                     toDownload.add(audio)
+                    toDownloadIdx.add(globalIndex)
+                } else if (dl != 0) {
+                    alreadyDownloaded++
+                } else {
+                    localSkipped++
                 }
+                scanned++
+                globalIndex++
             }
             offset += data.size
             page++
         }
+        log(
+            "=== PHASE 1 done: scanned=" + scanned + ", toDownload=" + toDownload.size +
+                ", alreadyDownloaded=" + alreadyDownloaded + ", localSkipped=" + localSkipped +
+                ", firstNonPlayableIndex=" + firstNonPlayableIndex + ", classCounts=" + classCounts + " ==="
+        )
 
         val total = toDownload.size
         if (total == 0) {
+            log("Nothing to download -> exit")
             return Result.success()
         }
 
         CheckDirectory(Settings.get().main().musicDir)
 
         // Фаза 2: последовательное скачивание с единым прогресс-уведомлением.
+        log("=== PHASE 2: downloading " + total + " tracks ===")
         var done = 0
-        for (audio in toDownload) {
+        var success = 0
+        val failByReason = HashMap<String, Int>()
+        for (i in toDownload.indices) {
             if (isStopped) {
+                log("isStopped -> break at i=" + i)
                 break
             }
+            val audio = toDownload[i]
+            val gidx = toDownloadIdx[i]
             setForegroundAsync(buildForeground(progressText(done, total)))
+            log(
+                "--- [dl " + (i + 1) + "/" + total + "] libIndex=" + gidx +
+                    " owner=" + audio.ownerId + " id=" + audio.id +
+                    " \"" + audio.artist + " - " + audio.title + "\""
+            )
+            var reason = "exception"
             try {
-                downloadOne(audio, accountId)
+                reason = downloadOne(audio, accountId)
             } catch (e: Exception) {
+                log("    -> EXCEPTION in downloadOne: " + e.message)
                 e.printStackTrace()
             }
+            if (reason == "ok") {
+                success++
+            } else {
+                inc(failByReason, reason)
+            }
+            log("    result=" + reason + " (running success=" + success + ")")
             done++
         }
         setForegroundAsync(buildForeground(progressText(done, total)))
+        log(
+            "=== PHASE 2 done: processed=" + done + ", success=" + success +
+                ", failures=" + (done - success) + ", failByReason=" + failByReason + " ==="
+        )
         return Result.success()
     }
 
@@ -207,11 +357,21 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
      * уведомление «отсутствует локальная копия» (MissingTrackNotifier).
      * HLS-треки скачиваются через M3U8 + TSDemuxer (нативный модуль);
      * если модуль не загружен — трек считается недоступным.
+     *
+     * DEBUG: возвращает строку-причину для сводки (ok / empty_url /
+     * hls_no_native / download_failed_hls / download_failed_raw / stopped).
+     * Логика не изменена — добавлено только логирование и возврат причины.
      */
-    private fun downloadOne(audio: Audio, accountId: Long) {
+    private fun downloadOne(audio: Audio, accountId: Long): String {
+        val urlBefore = audio.url
         // Дорезолвить ссылку, если требуется (как в TrackDownloadWorker).
         val mode = audio.needRefresh()
+        log(
+            "    needRefresh: first=" + mode.first + ", second(old)=" + mode.second +
+                ", urlBeforeClass=" + classifyUrl(urlBefore) + ", isHLS=" + audio.isHLS
+        )
         if (mode.first) {
+            log("    re-resolving via getByIdOld(old=" + mode.second + ") ...")
             val link: String? = InteractorFactory
                 .createAudioInteractor()
                 .getByIdOld(accountId, listOf(audio), mode.second)
@@ -219,21 +379,29 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
                     e[0].url.nonNullNoEmpty({ l -> l }, { audio.url.orEmpty() })
                 }.syncSingleSafe(audio.url)
             if (link.nonNullNoEmpty()) {
+                log(
+                    "    re-resolve returned urlClass=" + classifyUrl(link) +
+                        ", changed=" + (link != urlBefore)
+                )
                 audio.setUrl(link)
+            } else {
+                log("    re-resolve returned empty/null (kept urlClass=" + classifyUrl(audio.url) + ")")
             }
         }
 
         val url = audio.url
         if (url.isNullOrEmpty()) {
             // Трек недоступен онлайн — локальной копии не будет, сообщаем ожидаемое имя файла.
+            log("    -> FAIL: url empty after refresh; MissingTrackNotifier")
             MissingTrackNotifier.show(applicationContext, audio)
-            return
+            return "empty_url"
         }
 
         // HLS без нативного модуля распаковать невозможно.
         if (audio.isHLS && !FenrirNative.isNativeLoaded) {
+            log("    -> FAIL: HLS but native module not loaded; MissingTrackNotifier")
             MissingTrackNotifier.show(applicationContext, audio)
-            return
+            return "hls_no_native"
         }
 
         val dir = Settings.get().main().musicDir
@@ -241,12 +409,17 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         val fileName = "$baseName.mp3"
         val target = File(dir, fileName)
 
-        val ok = if (audio.isHLS) downloadHls(url, dir, baseName, target) else downloadRaw(url, target)
+        val isHls = audio.isHLS
+        log("    downloading: branch=" + (if (isHls) "HLS" else "RAW") + ", urlClass=" + classifyUrl(url))
+        val ok = if (isHls) downloadHls(url, dir, baseName, target) else downloadRaw(url, target)
         if (!ok) {
             if (!isStopped) {
+                log("    -> FAIL: download returned false (branch=" + (if (isHls) "HLS" else "RAW") + "); MissingTrackNotifier")
                 MissingTrackNotifier.show(applicationContext, audio)
+            } else {
+                log("    -> STOPPED during download")
             }
-            return
+            return if (isStopped) "stopped" else if (isHls) "download_failed_hls" else "download_failed_raw"
         }
 
         // Обложка + ID3-теги (не критично: ошибки не роняют скачивание).
@@ -272,6 +445,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
                         commentText
                     )
                 } catch (e: Throwable) {
+                    log("    tag/cover error (non-fatal): " + e.message)
                     e.printStackTrace()
                 } finally {
                     if (coverFile.exists()) {
@@ -289,6 +463,8 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
                 Uri.fromFile(target)
             )
         )
+        log("    -> OK: saved " + fileName)
+        return "ok"
     }
 
     /**
@@ -312,6 +488,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             }
             true
         } catch (e: Exception) {
+            log("      downloadHls exception: " + e.message)
             e.printStackTrace()
             if (target.exists()) {
                 target.delete()
@@ -332,6 +509,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
      */
     private fun downloadRaw(url: String?, target: File): Boolean {
         if (url.isNullOrEmpty()) {
+            log("      downloadRaw: url null/empty")
             return false
         }
         var success = false
@@ -339,6 +517,9 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             val client = Utils.createOkHttp(Constants.DOWNLOAD_TIMEOUT, false).build()
             val request: Request = Request.Builder().url(url).build()
             client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    log("      downloadRaw: HTTP " + response.code + " " + response.message + " urlClass=" + classifyUrl(url))
+                }
                 if (response.isSuccessful) {
                     // Файл создаём только после подтверждения успешного ответа,
                     // чтобы не оставлять осиротевший 0-байтный файл при ошибке.
@@ -358,6 +539,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
                 }
             }
         } catch (e: Exception) {
+            log("      downloadRaw exception: " + e.message)
             e.printStackTrace()
             success = false
         }
@@ -368,6 +550,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     }
 
     companion object {
+        private const val LOG_TAG = "FullAudioSync"
         private const val UNIQUE_NAME = "full_my_music_sync"
         private const val PAGE_COUNT = 100
         private const val MAX_PAGES = 1000
