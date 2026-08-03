@@ -24,6 +24,7 @@ import dev.ragnarok.fenrir.media.music.MusicPlaybackController
 import dev.ragnarok.fenrir.model.Audio
 import dev.ragnarok.fenrir.module.FenrirNative
 import dev.ragnarok.fenrir.module.FileUtils
+import dev.ragnarok.fenrir.module.hls.TSDemuxer
 import dev.ragnarok.fenrir.nonNullNoEmpty
 import dev.ragnarok.fenrir.settings.ISettings
 import dev.ragnarok.fenrir.settings.Settings
@@ -32,6 +33,7 @@ import dev.ragnarok.fenrir.util.DownloadWorkUtils.CheckDirectory
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.makeLegalFilename
 import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.syncSingleSafe
+import dev.ragnarok.fenrir.util.hls.M3U8
 import kotlinx.coroutines.flow.map
 import okhttp3.Request
 import java.io.BufferedInputStream
@@ -146,6 +148,9 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         setForegroundAsync(buildForeground(progressText(0, 0)))
 
         // Фаза 1: собрать все ещё не скачанные треки «Моей музыки».
+        // Пагинация завершается только через data.isEmpty() — VK может вернуть меньше
+        // PAGE_COUNT треков на промежуточной странице (скрытые правообладателями),
+        // поэтому break по data.size < PAGE_COUNT был бы преждевременным.
         val toDownload = ArrayList<Audio>()
         var offset = 0
         var page = 0
@@ -160,7 +165,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
                 val url = audio.url
                 val isLocalFile =
                     url != null && (url.contains("file://") || url.contains("content://"))
-                if (!audio.isLocal && !audio.isLocalServer && !audio.isHLS && !isLocalFile &&
+                if (!audio.isLocal && !audio.isLocalServer && !isLocalFile &&
                     TrackIsDownloaded(audio) == 0
                 ) {
                     toDownload.add(audio)
@@ -168,9 +173,6 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             }
             offset += data.size
             page++
-            if (data.size < PAGE_COUNT) {
-                break
-            }
         }
 
         val total = toDownload.size
@@ -203,6 +205,8 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
      * регистрирует его в реестре скачанного. Если скачать не удалось
      * (трек недоступен онлайн или ошибка сети) — показывает единое
      * уведомление «отсутствует локальная копия» (MissingTrackNotifier).
+     * HLS-треки скачиваются через M3U8 + TSDemuxer (нативный модуль);
+     * если модуль не загружен — трек считается недоступным.
      */
     private fun downloadOne(audio: Audio, accountId: Long) {
         // Дорезолвить ссылку, если требуется (как в TrackDownloadWorker).
@@ -219,8 +223,15 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             }
         }
 
-        if (audio.url.isNullOrEmpty()) {
+        val url = audio.url
+        if (url.isNullOrEmpty()) {
             // Трек недоступен онлайн — локальной копии не будет, сообщаем ожидаемое имя файла.
+            MissingTrackNotifier.show(applicationContext, audio)
+            return
+        }
+
+        // HLS без нативного модуля распаковать невозможно.
+        if (audio.isHLS && !FenrirNative.isNativeLoaded) {
             MissingTrackNotifier.show(applicationContext, audio)
             return
         }
@@ -230,7 +241,8 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         val fileName = "$baseName.mp3"
         val target = File(dir, fileName)
 
-        if (!downloadRaw(audio.url, target)) {
+        val ok = if (audio.isHLS) downloadHls(url, dir, baseName, target) else downloadRaw(url, target)
+        if (!ok) {
             if (!isStopped) {
                 MissingTrackNotifier.show(applicationContext, audio)
             }
@@ -277,6 +289,39 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
                 Uri.fromFile(target)
             )
         )
+    }
+
+    /**
+     * HLS-поток: скачиваем M3U8 в .ts и распаковываем в mp3 через нативный TSDemuxer —
+     * та же связка, что в TransparentCacheWorker, но без его уведомлений.
+     */
+    private fun downloadHls(url: String, dir: String, baseName: String, target: File): Boolean {
+        val ts = File(dir, "$baseName.ts")
+        return try {
+            if (!M3U8(url, ts.absolutePath).run()) {
+                throw Exception("M3U8 error download")
+            }
+            if (!TSDemuxer.unpackTS(
+                    ts.absolutePath,
+                    target.absolutePath,
+                    info = false,
+                    print_debug = false
+                )
+            ) {
+                throw Exception("Error TSDemuxer")
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            if (target.exists()) {
+                target.delete()
+            }
+            false
+        } finally {
+            if (ts.exists()) {
+                ts.delete()
+            }
+        }
     }
 
     /**
