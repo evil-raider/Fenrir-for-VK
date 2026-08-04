@@ -153,7 +153,6 @@ class AudiosPresenter(
             audios.addAll(data)
             receivedVkCount = data.size
             view?.notifyListChanged()
-            mergeLocalUnified()
         } else {
             // FENRIR-CI: новые страницы VK вставляются перед локальными треками,
             // чтобы локальные всегда оставались в конце списка.
@@ -164,6 +163,12 @@ class AudiosPresenter(
             receivedVkCount += data.size
             view?.notifyDataAdded(insertPos, data.size)
         }
+        // FENRIR-CI (фикс дублирования): пересчитываем локальные "довески" после
+        // КАЖДОЙ страницы VK, а не только после первой — иначе трек, который на
+        // момент первого вызова ещё не пришёл с сервера, но уже был скачан ранее,
+        // остаётся в списке отдельной "локальной" записью и задваивается, когда
+        // его "настоящая" VK-версия подгружается на одной из следующих страниц.
+        mergeLocalUnified()
         setLoadingNow(false)
         if (needDeadHelper) {
             for (i in audios) {
@@ -184,6 +189,15 @@ class AudiosPresenter(
     // FENRIR-CI: единый плейлист — для «Моей музыки» подмешивает в конец списка локальные
     // треки из папок (musicDir + «Папка с локальной музыкой»), которых нет среди VK-треков;
     // для остальных плейлистов только прогревает кэш соответствий (поиск локального аналога).
+    //
+    // FENRIR-CI (фикс дублирования): теперь пересчитывается с нуля при каждом вызове —
+    // сначала убирает предыдущий хвост "локальных" записей (url начинается с file:// /
+    // content://), затем строит его заново по ПОЛНОМУ текущему списку VK-треков, а не
+    // только по той странице, что была загружена на момент первого вызова. Раньше довесок
+    // вычислялся один раз сразу после первой сотни VK-треков и только дописывался в конец;
+    // когда фоновая автодогрузка (см. onListReceived) позже подгружала треки 101+, их
+    // VK-версии вставлялись ДО уже добавленного локального довеска, и трек оставался в
+    // списке дважды.
     private fun mergeLocalUnified() {
         if (iSSelectMode || searcher.isSearchMode) {
             return
@@ -194,14 +208,24 @@ class AudiosPresenter(
             )
             return
         }
+        val vkOnly = audios.filterNot {
+            it.url?.startsWith("file://") == true || it.url?.startsWith("content://") == true
+        }
         audioListDisposable.add(
-            UnifiedPlaylist.appendLocalOnly(accountId, audios)
+            UnifiedPlaylist.appendLocalOnly(accountId, vkOnly)
                 .fromIOToMain({ extras ->
-                    if (extras.nonNullNoEmpty()) {
-                        val startPos = audios.size
-                        audios.addAll(extras)
-                        view?.notifyDataAdded(startPos, extras.size)
+                    val firstLocalIdx = audios.indexOfFirst {
+                        it.url?.startsWith("file://") == true || it.url?.startsWith("content://") == true
                     }
+                    if (firstLocalIdx >= 0) {
+                        while (audios.size > firstLocalIdx) {
+                            audios.removeAt(audios.size - 1)
+                        }
+                    }
+                    if (extras.nonNullNoEmpty()) {
+                        audios.addAll(extras)
+                    }
+                    view?.notifyListChanged()
                 }) { }
         )
     }
