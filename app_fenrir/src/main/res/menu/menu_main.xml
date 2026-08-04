@@ -2,6 +2,11 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
 
     <item
+        android:id="@+id/menu_music"
+        android:icon="@drawable/music"
+        android:title="@string/music" />
+
+    <item
         android:id="@+id/menu_feed"
         android:icon="@drawable/rss"
         android:title="@string/feed" />
@@ -20,11 +25,6 @@
         android:id="@+id/menu_feedback"
         android:icon="@drawable/feed"
         android:title="@string/drawer_feedback" />
-
-    <item
-        android:id="@+id/menu_music"
-        android:icon="@drawable/music"
-        android:title="@string/music" />
 
     <item
         android:id="@+id/menu_other"
