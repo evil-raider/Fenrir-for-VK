@@ -17,6 +17,7 @@ internal class DrawerSettings(context: Context) : IDrawerSettings {
     private val app: Context = context.applicationContext
     internal fun makeDefaults(): List<DrawerCategory> {
         return listOf(
+            DrawerCategory(SwitchableCategory.MUSIC),
             DrawerCategory(SwitchableCategory.FRIENDS),
             DrawerCategory(SwitchableCategory.STORIES),
             DrawerCategory(SwitchableCategory.CLIPS, Utils.isOfficialDefault),
@@ -24,7 +25,6 @@ internal class DrawerSettings(context: Context) : IDrawerSettings {
             DrawerCategory(SwitchableCategory.GROUPS),
             DrawerCategory(SwitchableCategory.PHOTOS),
             DrawerCategory(SwitchableCategory.VIDEOS),
-            DrawerCategory(SwitchableCategory.MUSIC),
             DrawerCategory(SwitchableCategory.DOCS),
             DrawerCategory(SwitchableCategory.FAVES),
             DrawerCategory(SwitchableCategory.SETTINGS),
