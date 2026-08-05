@@ -10,8 +10,10 @@ import android.os.BatteryManager
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ForegroundInfo
+import androidx.work.OneTimeWorkRequest
 import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import androidx.work.Worker
@@ -58,6 +60,12 @@ import java.util.concurrent.TimeUnit
  * устройство (если включено «только при зарядке»). Если условие не выполнено — молча
  * пропускает попытку (Result.success()) и повторит её через сутки. Не
  * запускается при заходе в «Мою музыку».
+ *
+ * Ручной запуск (кнопка «Синхронизировать сейчас», см. enqueueManualSync)
+ * передаёт во входные данные флаг INPUT_KEY_MANUAL=true — в этом режиме
+ * условия Wi-Fi и зарядки НЕ проверяются, так как пользователь запросил
+ * синхронизацию явно. Условие включённого автоскачивания и наличия аккаунта
+ * при этом остаётся в силе.
  *
  * Воркер сам проходит все страницы «Моей музыки», собирает список ещё не
  * скачанных треков и последовательно скачивает каждый (mp3 + обложка + ID3-теги
@@ -214,6 +222,12 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     }
 
     private fun doWorkInner(): Result {
+        // Ручной запуск (кнопка «Синхронизировать сейчас») игнорирует условия
+        // Wi-Fi/зарядки — раз пользователь запросил синхронизацию явно, ждать
+        // подходящих условий не нужно. Время (TARGET_HOUR) в doWork вообще не
+        // проверяется — оно влияет только на первоначальную задержку периодической
+        // задачи при schedule().
+        val manual = inputData.getBoolean(INPUT_KEY_MANUAL, false)
         // Автоскачивание выключено — тихо выходим.
         if (!Settings.get().main().isAutoDownload_music) {
             log("GATE: autoDownload disabled -> exit")
@@ -224,16 +238,18 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             log("GATE: invalid account -> exit")
             return Result.success()
         }
-        log("accountId=" + accountId)
+        log("accountId=" + accountId + ", manual=" + manual)
         // Условие Wi-Fi (если включено «только по Wi-Fi») — иначе пропускаем до следующих суток.
-        if (Settings.get().main().isAutoDownload_music_wifi_only && !isWifiConnected()) {
+        // Для ручного запуска не проверяется.
+        if (!manual && Settings.get().main().isAutoDownload_music_wifi_only && !isWifiConnected()) {
             log("GATE: wifiOnly but no wifi -> exit")
             return Result.success()
         }
         // Условие зарядки — опциональное (по умолчанию требуется). Управляется
         // тумблером auto_download_music_charging_only в настройках. Если включено
-        // и питания нет — не тратим заряд, пробуем через сутки.
-        if (Settings.get().main().isAutoDownload_music_charging_only && !isCharging()) {
+        // и питания нет — не тратим заряд, пробуем через сутки. Для ручного
+        // запуска не проверяется.
+        if (!manual && Settings.get().main().isAutoDownload_music_charging_only && !isCharging()) {
             log("GATE: chargingOnly but not charging -> exit")
             return Result.success()
         }
@@ -557,6 +573,24 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         private const val NOTIFICATION_FULL_SYNC = 4823
         private const val FOREGROUND_CHANNEL_ID = "worker_channel"
         private const val TARGET_HOUR = 5
+        private const val INPUT_KEY_MANUAL = "manual"
+
+        /**
+         * Запускает синхронизацию немедленно по требованию пользователя (кнопка
+         * «Синхронизировать сейчас»). В отличие от периодического запуска по
+         * расписанию, ручной прогон игнорирует условия Wi-Fi и зарядки — см.
+         * doWorkInner(). Условия «включено автоскачивание» и «есть аккаунт»
+         * всё равно проверяются.
+         */
+        fun enqueueManualSync(context: Context) {
+            val data = Data.Builder()
+                .putBoolean(INPUT_KEY_MANUAL, true)
+                .build()
+            val request = OneTimeWorkRequest.Builder(FullAudioSyncWorker::class)
+                .setInputData(data)
+                .build()
+            WorkManager.getInstance(context).enqueue(request)
+        }
 
         /**
          * Планирует ежедневную фоновую синхронизацию «Моей музыки» примерно на 5:00.
