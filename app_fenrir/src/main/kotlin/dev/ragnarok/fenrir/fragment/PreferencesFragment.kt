@@ -134,6 +134,7 @@ import dev.ragnarok.fenrir.trimmedNonNullNoEmpty
 import dev.ragnarok.fenrir.util.AppPerms
 import dev.ragnarok.fenrir.util.AppPerms.requestPermissionsAbs
 import dev.ragnarok.fenrir.util.CoverSafeResize
+import dev.ragnarok.fenrir.util.FullAudioSyncWorker
 import dev.ragnarok.fenrir.util.Utils
 import dev.ragnarok.fenrir.util.coroutines.CancelableJob
 import dev.ragnarok.fenrir.util.coroutines.CompositeJob
@@ -1416,8 +1417,6 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
                 }
             }
 
-            switch("use_api_5_90_for_audio") {
-                summaryRes = R.string.use_api_5_90_for_audio_summary
             switch("auto_download_music_enable") {
                 defaultValue = false
                 titleRes = R.string.auto_download_music_enable
@@ -1436,9 +1435,27 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
                 dependency = "auto_download_music_enable"
             }
 
+            pref("full_audio_sync_now") {
+                titleRes = R.string.sync
+                iconRes = R.drawable.sync_settings
+                dependency = "auto_download_music_enable"
+                onClick {
+                    val fullSyncWork = OneTimeWorkRequest.Builder(FullAudioSyncWorker::class)
+                    WorkManager.getInstance(requireActivity()).enqueue(fullSyncWork.build())
+                    CustomSnackbars.createCustomSnackbars(view)
+                        ?.setDurationSnack(Snackbar.LENGTH_LONG)
+                        ?.themedSnack(R.string.later)
+                        ?.show()
+                    true
+                }
+            }
+
+            switch("use_api_5_90_for_audio") {
                 titleRes = R.string.use_api_5_90_for_audio
+                summaryRes = R.string.use_api_5_90_for_audio_summary
                 defaultValue = true
             }
+
             switch("audio_round_icon") {
                 defaultValue = true
                 titleRes = R.string.audio_round_icon
@@ -2711,370 +2728,4 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
         }
     }
 
-    class LocalMediaServerDialog : DialogFragment() {
-        @SuppressLint("CheckResult")
-        override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-            val view = View.inflate(
-                requireActivity(),
-                dev.ragnarok.fenrir_common.R.layout.entry_local_server,
-                null
-            )
-            val url: TextInputEditText = view.findViewById(dev.ragnarok.fenrir_common.R.id.edit_url)
-            val password: TextInputEditText =
-                view.findViewById(dev.ragnarok.fenrir_common.R.id.edit_password)
-            val enabled: MaterialSwitch =
-                view.findViewById(dev.ragnarok.fenrir_common.R.id.enabled_server)
-            val settings = Settings.get().main().localServer
-            url.setText(settings.url)
-            password.setText(settings.password)
-            enabled.isChecked = settings.enabled
-
-            view.findViewById<MaterialButton>(dev.ragnarok.fenrir_common.R.id.reboot_pc_win)
-                .setOnClickListener {
-                    Includes.networkInterfaces.localServerApi().rebootPC("win")
-                        .fromIOToMain({
-                            createCustomToast(
-                                requireActivity(),
-                                view
-                            )?.showToastSuccessBottom(R.string.success)
-                        }, { createCustomToast(requireActivity(), view)?.showToastThrowable(it) })
-                }
-
-            view.findViewById<MaterialButton>(dev.ragnarok.fenrir_common.R.id.reboot_pc_linux)
-                .setOnClickListener {
-                    Includes.networkInterfaces.localServerApi().rebootPC("linux")
-                        .fromIOToMain({
-                            createCustomToast(
-                                requireActivity(),
-                                view
-                            )?.showToastSuccessBottom(R.string.success)
-                        }, { createCustomToast(requireActivity(), view)?.showToastThrowable(it) })
-                }
-
-            return MaterialAlertDialogBuilder(requireActivity())
-                .setView(view)
-                .setCancelable(true)
-                .setNegativeButton(R.string.button_cancel, null)
-                .setPositiveButton(R.string.button_ok) { _, _ ->
-                    val enabledVal = enabled.isChecked
-                    val urlVal = url.editableText.toString()
-                    val passVal = password.editableText.toString()
-                    if (enabledVal && (urlVal.isEmpty() || passVal.isEmpty())) {
-                        return@setPositiveButton
-                    }
-                    val srv = LocalServerSettings()
-                    srv.enabled = enabledVal
-                    srv.password = passVal
-                    srv.url = urlVal
-                    Settings.get().main().localServer = srv
-                    Includes.proxySettings.broadcastUpdate(null)
-                }
-                .create()
-        }
-
-    }
-
-    class SlidrEditDialog : DialogFragment() {
-        override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-            val view = View.inflate(requireActivity(), R.layout.entry_slidr_settings, null)
-
-            val verticalSensitive =
-                view.findViewById<Slider>(R.id.edit_vertical_sensitive)
-            val horizontalSensitive =
-                view.findViewById<Slider>(R.id.edit_horizontal_sensitive)
-            val textHorizontalSensitive: MaterialTextView =
-                view.findViewById(R.id.text_horizontal_sensitive)
-            val textVerticalSensitive: MaterialTextView =
-                view.findViewById(R.id.text_vertical_sensitive)
-
-            val verticalVelocityThreshold =
-                view.findViewById<Slider>(R.id.edit_vertical_velocity_threshold)
-            val horizontalVelocityThreshold =
-                view.findViewById<Slider>(R.id.edit_horizontal_velocity_threshold)
-            val textHorizontalVelocityThreshold: MaterialTextView =
-                view.findViewById(R.id.text_horizontal_velocity_threshold)
-            val textVerticalVelocityThreshold: MaterialTextView =
-                view.findViewById(R.id.text_vertical_velocity_threshold)
-
-            val verticalDistanceThreshold =
-                view.findViewById<Slider>(R.id.edit_vertical_distance_threshold)
-            val horizontalDistanceThreshold =
-                view.findViewById<Slider>(R.id.edit_horizontal_distance_threshold)
-            val textHorizontalDistanceThreshold: MaterialTextView =
-                view.findViewById(R.id.text_horizontal_distance_threshold)
-            val textVerticalDistanceThreshold: MaterialTextView =
-                view.findViewById(R.id.text_vertical_distance_threshold)
-
-            verticalSensitive.addOnChangeListener { _, value, fromUser ->
-                if (fromUser && value < 20) {
-                    verticalSensitive.value = 20.0f
-                    textVerticalSensitive.text = getString(R.string.slidr_sensitive, 20)
-                } else {
-                    textVerticalSensitive.text = getString(R.string.slidr_sensitive, value.toInt())
-                }
-            }
-
-            horizontalSensitive.addOnChangeListener { _, value, fromUser ->
-                if (fromUser && value < 20) {
-                    horizontalSensitive.value = 20.0f
-                    textHorizontalSensitive.text = getString(R.string.slidr_sensitive, 20)
-                } else {
-                    textHorizontalSensitive.text =
-                        getString(R.string.slidr_sensitive, value.toInt())
-                }
-            }
-
-            verticalVelocityThreshold.addOnChangeListener { _, value, fromUser ->
-                if (fromUser && value < 4) {
-                    verticalVelocityThreshold.value = 4.0f
-                    textVerticalVelocityThreshold.text =
-                        getString(R.string.slidr_velocity_threshold, 4)
-                } else {
-                    textVerticalVelocityThreshold.text =
-                        getString(R.string.slidr_velocity_threshold, value.toInt())
-                }
-            }
-
-            horizontalVelocityThreshold.addOnChangeListener { _, value, fromUser ->
-                if (fromUser && value < 4) {
-                    horizontalVelocityThreshold.value = 4.0f
-                    textHorizontalVelocityThreshold.text =
-                        getString(R.string.slidr_velocity_threshold, 4)
-                } else {
-                    textHorizontalVelocityThreshold.text =
-                        getString(R.string.slidr_velocity_threshold, value.toInt())
-                }
-            }
-
-            verticalDistanceThreshold.addOnChangeListener { _, value, fromUser ->
-                if (fromUser && value < 4) {
-                    verticalDistanceThreshold.value = 4.0f
-                    textVerticalDistanceThreshold.text =
-                        getString(R.string.slidr_distance_threshold, 4)
-                } else {
-                    textVerticalDistanceThreshold.text =
-                        getString(R.string.slidr_distance_threshold, value.toInt())
-                }
-            }
-
-            horizontalDistanceThreshold.addOnChangeListener { _, value, fromUser ->
-                if (fromUser && value < 4) {
-                    horizontalDistanceThreshold.value = 4.0f
-                    textHorizontalDistanceThreshold.text =
-                        getString(R.string.slidr_distance_threshold, 4)
-                } else {
-                    textHorizontalDistanceThreshold.text =
-                        getString(R.string.slidr_distance_threshold, value.toInt())
-                }
-            }
-
-            val settings = Settings.get()
-                .main().slidrSettings
-            verticalSensitive.value = (settings.vertical_sensitive * 100).toInt().toFloat()
-            horizontalSensitive.value = (settings.horizontal_sensitive * 100).toInt().toFloat()
-
-            textHorizontalSensitive.text = getString(
-                R.string.slidr_sensitive,
-                (settings.horizontal_sensitive * 100).toInt()
-            )
-            textVerticalSensitive.text =
-                getString(
-                    R.string.slidr_sensitive,
-                    (settings.vertical_sensitive * 100).toInt()
-                )
-
-            verticalVelocityThreshold.value =
-                (settings.vertical_velocity_threshold * 10).toInt().toFloat()
-            horizontalVelocityThreshold.value =
-                (settings.horizontal_velocity_threshold * 10).toInt().toFloat()
-
-            textHorizontalVelocityThreshold.text = getString(
-                R.string.slidr_velocity_threshold,
-                (settings.horizontal_velocity_threshold * 10).toInt()
-            )
-            textVerticalVelocityThreshold.text = getString(
-                R.string.slidr_velocity_threshold,
-                (settings.vertical_velocity_threshold * 10).toInt()
-            )
-
-            verticalDistanceThreshold.value =
-                (settings.vertical_distance_threshold * 100).toInt().toFloat()
-            horizontalDistanceThreshold.value =
-                (settings.horizontal_distance_threshold * 100).toInt().toFloat()
-
-            textHorizontalDistanceThreshold.text = getString(
-                R.string.slidr_distance_threshold,
-                (settings.horizontal_distance_threshold * 100).toInt()
-            )
-            textVerticalDistanceThreshold.text = getString(
-                R.string.slidr_distance_threshold,
-                (settings.vertical_distance_threshold * 100).toInt()
-            )
-
-            return MaterialAlertDialogBuilder(requireActivity())
-                .setView(view)
-                .setCancelable(true)
-                .setNegativeButton(R.string.button_cancel, null)
-                .setNeutralButton(R.string.set_default) { _, _ ->
-                    Settings.get()
-                        .main().slidrSettings = SlidrSettings().set_default()
-                    parentFragmentManager.setFragmentResult(
-                        PreferencesExtra.RECREATE_ACTIVITY_REQUEST,
-                        Bundle()
-                    )
-                    dismiss()
-                }
-                .setPositiveButton(R.string.button_ok) { _, _ ->
-                    val st = SlidrSettings()
-                    st.horizontal_sensitive = horizontalSensitive.value.toInt().toFloat() / 100
-                    st.vertical_sensitive = verticalSensitive.value.toInt().toFloat() / 100
-
-                    st.horizontal_velocity_threshold =
-                        horizontalVelocityThreshold.value.toInt().toFloat() / 10
-                    st.vertical_velocity_threshold =
-                        verticalVelocityThreshold.value.toInt().toFloat() / 10
-
-                    st.horizontal_distance_threshold =
-                        horizontalDistanceThreshold.value.toInt().toFloat() / 100
-                    st.vertical_distance_threshold =
-                        verticalDistanceThreshold.value.toInt().toFloat() / 100
-                    Settings.get()
-                        .main().slidrSettings = st
-                    parentFragmentManager.setFragmentResult(
-                        PreferencesExtra.RECREATE_ACTIVITY_REQUEST,
-                        Bundle()
-                    )
-                    dismiss()
-                }.create()
-        }
-    }
-
-    override fun onDestroy() {
-        sleepDataDisposable.cancel()
-        disposables.cancel()
-        preferencesView?.let { preferencesAdapter?.stopObserveScrollPosition(it, appBarView) }
-        preferencesAdapter?.onScreenChangeListener = null
-        preferencesView?.adapter = null
-        super.onDestroy()
-    }
-
-    companion object {
-        const val KEY_DEFAULT_CATEGORY = "default_category"
-        const val KEY_AVATAR_STYLE = "avatar_style"
-        private const val KEY_APP_THEME = "app_theme"
-        private const val KEY_NIGHT_SWITCH = "night_switch"
-        private const val KEY_NOTIFICATION = "notifications"
-        private const val KEY_SECURITY = "security"
-        private const val KEY_DRAWER_ITEMS = "drawer_categories"
-        private const val KEY_SIDE_DRAWER_ITEMS = "side_drawer_categories"
-
-
-        fun buildArgs(accountId: Long): Bundle {
-            val args = Bundle()
-            args.putLong(ACCOUNT_ID, accountId)
-            return args
-        }
-
-        fun newInstance(args: Bundle?): PreferencesFragment {
-            val fragment = PreferencesFragment()
-            fragment.arguments = args
-            return fragment
-        }
-
-        fun cleanTmpFileCache(context: Context, notify: Boolean) {
-            try {
-                PicassoInstance.clear_cache()
-                var cache = File(context.cacheDir, "notif-cache")
-                if (cache.exists() && cache.isDirectory) {
-                    val children = cache.list()
-                    if (children != null) {
-                        for (child in children) {
-                            val rem = File(cache, child)
-                            if (rem.isFile) {
-                                rem.delete()
-                            }
-                        }
-                    }
-                }
-                cache = File(context.cacheDir, "covers-cache")
-                if (cache.exists() && cache.isDirectory) {
-                    val children = cache.list()
-                    if (children != null) {
-                        for (child in children) {
-                            val rem = File(cache, child)
-                            if (rem.isFile) {
-                                rem.delete()
-                            }
-                        }
-                    }
-                }
-                cache = File(context.cacheDir, "lottie_cache")
-                if (cache.exists() && cache.isDirectory) {
-                    val children = cache.list()
-                    if (children != null) {
-                        for (child in children) {
-                            val rem = File(cache, child)
-                            if (rem.isFile) {
-                                rem.delete()
-                            }
-                        }
-                    }
-                }
-                cache = File(context.cacheDir, "video_network_cache")
-                if (cache.exists() && cache.isDirectory) {
-                    val children = cache.list()
-                    if (children != null) {
-                        for (child in children) {
-                            val rem = File(cache, child)
-                            if (rem.isFile) {
-                                rem.delete()
-                            }
-                        }
-                    }
-                }
-                cache = File(context.cacheDir, "video_resource_cache")
-                if (cache.exists() && cache.isDirectory) {
-                    val children = cache.list()
-                    if (children != null) {
-                        for (child in children) {
-                            val rem = File(cache, child)
-                            if (rem.isFile) {
-                                rem.delete()
-                            }
-                        }
-                    }
-                }
-                AudioRecordWrapper.getRecordingDirectory(context)?.let {
-                    if (it.exists() && it.isDirectory) {
-                        val children = it.list()
-                        if (children != null) {
-                            for (child in children) {
-                                val rem = File(it, child)
-                                if (rem.isFile) {
-                                    rem.delete()
-                                }
-                            }
-                        }
-                    }
-                }
-                if (notify) createCustomToast(context, null)?.showToast(R.string.success)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                if (notify) createCustomToast(context, null)?.showToastError(e.localizedMessage)
-            }
-        }
-
-        fun cleanCache(activity: Activity, accountId: Long, dropAccountDatabase: Boolean) {
-            if (dropAccountDatabase) {
-                DBHelper.removeDatabaseFor(activity, accountId)
-            }
-            TempDataHelper.helper.clear()
-            cleanTmpFileCache(activity, true)
-            Includes.stores.stickers().clearAccount(accountId).syncSingleSafe()
-            Includes.stores.tempStore().clearReactionAssets(accountId)
-                .syncSingleSafe()
-            Utils.clearReactionAssets(accountId)
-            activity.recreate()
-        }
-    }
-}
+    
