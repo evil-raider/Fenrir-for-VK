@@ -2404,160 +2404,11 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
         IconSelectDialog().show(parentFragmentManager, "IconSelectDialog")
     }
 
-    class IconSelectDialog : DialogFragment() {
-        override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-            val view = View.inflate(requireActivity(), R.layout.icon_select_alert, null)
-            view.findViewById<View>(R.id.default_icon).setOnClickListener {
-                ToggleAlias.reset(
-                    requireActivity()
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.blue_icon).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    BlueFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.green_icon).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    GreenFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.violet_icon).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    VioletFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.red_icon).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    RedFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.yellow_icon).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    YellowFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.black_icon).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    BlackFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.vk_official).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    VKFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.white_icon).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    WhiteFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            view.findViewById<View>(R.id.lineage_icon).setOnClickListener {
-                ToggleAlias.toggleTo(
-                    requireActivity(),
-                    LineageFenrirAlias::class.java
-                )
-                dismiss()
-            }
-            return MaterialAlertDialogBuilder(requireActivity())
-                .setView(view)
-                .create()
-        }
-
-    }
 
     private fun showAvatarStyleDialog() {
         AvatarStyleDialog().show(parentFragmentManager, " AvatarStyleDialog")
     }
 
-    class AvatarStyleDialog : DialogFragment() {
-        private fun resolveAvatarStyleViews(style: Int, circle: ImageView, oval: ImageView) {
-            when (style) {
-                AvatarStyle.CIRCLE -> {
-                    circle.visibility = View.VISIBLE
-                    oval.visibility = View.INVISIBLE
-                }
-
-                AvatarStyle.OVAL -> {
-                    circle.visibility = View.INVISIBLE
-                    oval.visibility = View.VISIBLE
-                }
-            }
-        }
-
-        override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-            val current = Settings.get()
-                .ui()
-                .avatarStyle
-            val view = View.inflate(requireActivity(), R.layout.dialog_avatar_style, null)
-            val ivCircle =
-                view.findViewById<ImageView>(R.id.circle_avatar)
-            val ivOval =
-                view.findViewById<ImageView>(R.id.oval_avatar)
-            val ivCircleSelected =
-                view.findViewById<ImageView>(R.id.circle_avatar_selected)
-            val ivOvalSelected =
-                view.findViewById<ImageView>(R.id.oval_avatar_selected)
-            ivCircle.setOnClickListener {
-                resolveAvatarStyleViews(
-                    AvatarStyle.CIRCLE,
-                    ivCircleSelected,
-                    ivOvalSelected
-                )
-            }
-            ivOval.setOnClickListener {
-                resolveAvatarStyleViews(
-                    AvatarStyle.OVAL,
-                    ivCircleSelected,
-                    ivOvalSelected
-                )
-            }
-            resolveAvatarStyleViews(current, ivCircleSelected, ivOvalSelected)
-            PicassoInstance.with()
-                .load(R.drawable.ava_settings)
-                .transform(RoundTransformation())
-                .into(ivCircle)
-            PicassoInstance.with()
-                .load(R.drawable.ava_settings)
-                .transform(EllipseTransformation())
-                .into(ivOval)
-            return MaterialAlertDialogBuilder(requireActivity())
-                .setTitle(R.string.avatar_style_title)
-                .setView(view)
-                .setPositiveButton(R.string.button_ok) { _, _ ->
-                    val circle = ivCircleSelected.isVisible
-                    Settings.get()
-                        .ui()
-                        .storeAvatarStyle(if (circle) AvatarStyle.CIRCLE else AvatarStyle.OVAL)
-                    PicassoInstance.clear_cache()
-                    parentFragmentManager.setFragmentResult(
-                        PreferencesExtra.RECREATE_ACTIVITY_REQUEST,
-                        Bundle()
-                    )
-                    dismiss()
-                }
-                .setNegativeButton(R.string.button_cancel, null)
-                .create()
-        }
-
-    }
 
     private val accountId: Long
         get() = requireArguments().getLong(ACCOUNT_ID)
@@ -2656,52 +2507,133 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
             .apply(requireActivity())
     }
 
-    class PlayerBackgroundDialog : DialogFragment() {
-        override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-            val view =
-                View.inflate(requireActivity(), R.layout.entry_player_background, null)
-            val enabledRotation: MaterialSwitch = view.findViewById(R.id.enabled_anim)
-            val invertRotation: MaterialSwitch =
-                view.findViewById(R.id.edit_invert_rotation)
-            val fadeSaturation: MaterialSwitch =
-                view.findViewById(R.id.edit_fade_saturation)
-            val rotationSpeed = view.findViewById<Slider>(R.id.edit_rotation_speed)
-            val zoom = view.findViewById<Slider>(R.id.edit_zoom)
-            val blur = view.findViewById<Slider>(R.id.edit_blur)
-            val textRotationSpeed: MaterialTextView =
-                view.findViewById(R.id.text_rotation_speed)
-            val textZoom: MaterialTextView = view.findViewById(R.id.text_zoom)
-            val textBlur: MaterialTextView = view.findViewById(R.id.text_blur)
-            zoom.addOnChangeListener { _, value, _ ->
-                textZoom.text = getString(R.string.rotate_scale, value.toInt())
+
+    override fun onDestroy() {
+        sleepDataDisposable.cancel()
+        disposables.cancel()
+        preferencesView?.let { preferencesAdapter?.stopObserveScrollPosition(it, appBarView) }
+        preferencesAdapter?.onScreenChangeListener = null
+        preferencesView?.adapter = null
+        super.onDestroy()
+    }
+
+    companion object {
+        const val KEY_DEFAULT_CATEGORY = "default_category"
+        const val KEY_AVATAR_STYLE = "avatar_style"
+        private const val KEY_APP_THEME = "app_theme"
+        private const val KEY_NIGHT_SWITCH = "night_switch"
+        private const val KEY_NOTIFICATION = "notifications"
+        private const val KEY_SECURITY = "security"
+        private const val KEY_DRAWER_ITEMS = "drawer_categories"
+        private const val KEY_SIDE_DRAWER_ITEMS = "side_drawer_categories"
+
+
+        fun buildArgs(accountId: Long): Bundle {
+            val args = Bundle()
+            args.putLong(ACCOUNT_ID, accountId)
+            return args
+        }
+
+        fun newInstance(args: Bundle?): PreferencesFragment {
+            val fragment = PreferencesFragment()
+            fragment.arguments = args
+            return fragment
+        }
+
+        fun cleanTmpFileCache(context: Context, notify: Boolean) {
+            try {
+                PicassoInstance.clear_cache()
+                var cache = File(context.cacheDir, "notif-cache")
+                if (cache.exists() && cache.isDirectory) {
+                    val children = cache.list()
+                    if (children != null) {
+                        for (child in children) {
+                            val rem = File(cache, child)
+                            if (rem.isFile) {
+                                rem.delete()
+                            }
+                        }
+                    }
+                }
+                cache = File(context.cacheDir, "covers-cache")
+                if (cache.exists() && cache.isDirectory) {
+                    val children = cache.list()
+                    if (children != null) {
+                        for (child in children) {
+                            val rem = File(cache, child)
+                            if (rem.isFile) {
+                                rem.delete()
+                            }
+                        }
+                    }
+                }
+                cache = File(context.cacheDir, "lottie_cache")
+                if (cache.exists() && cache.isDirectory) {
+                    val children = cache.list()
+                    if (children != null) {
+                        for (child in children) {
+                            val rem = File(cache, child)
+                            if (rem.isFile) {
+                                rem.delete()
+                            }
+                        }
+                    }
+                }
+                cache = File(context.cacheDir, "video_network_cache")
+                if (cache.exists() && cache.isDirectory) {
+                    val children = cache.list()
+                    if (children != null) {
+                        for (child in children) {
+                            val rem = File(cache, child)
+                            if (rem.isFile) {
+                                rem.delete()
+                            }
+                        }
+                    }
+                }
+                cache = File(context.cacheDir, "video_resource_cache")
+                if (cache.exists() && cache.isDirectory) {
+                    val children = cache.list()
+                    if (children != null) {
+                        for (child in children) {
+                            val rem = File(cache, child)
+                            if (rem.isFile) {
+                                rem.delete()
+                            }
+                        }
+                    }
+                }
+                AudioRecordWrapper.getRecordingDirectory(context)?.let {
+                    if (it.exists() && it.isDirectory) {
+                        val children = it.list()
+                        if (children != null) {
+                            for (child in children) {
+                                val rem = File(it, child)
+                                if (rem.isFile) {
+                                    rem.delete()
+                                }
+                            }
+                        }
+                    }
+                }
+                if (notify) createCustomToast(context, null)?.showToast(R.string.success)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                if (notify) createCustomToast(context, null)?.showToastError(e.localizedMessage)
             }
-            rotationSpeed.addOnChangeListener { _, value, _ ->
-                textRotationSpeed.text = getString(R.string.rotate_speed, value.toInt())
+        }
+
+        fun cleanCache(activity: Activity, accountId: Long, dropAccountDatabase: Boolean) {
+            if (dropAccountDatabase) {
+                DBHelper.removeDatabaseFor(activity, accountId)
             }
-            blur.addOnChangeListener { _, value, _ ->
-                textBlur.text = getString(R.string.player_blur, value.toInt())
-            }
-            val settings = Settings.get()
-                .main().playerCoverBackgroundSettings
-            enabledRotation.isChecked = settings.enabled_rotation
-            invertRotation.isChecked = settings.invert_rotation
-            fadeSaturation.isChecked = settings.fade_saturation
-            blur.value = settings.blur.toFloat()
-            rotationSpeed.value = (settings.rotation_speed * 10).toInt().toFloat()
-            zoom.value = ((settings.zoom - 1) * 10).toInt().toFloat()
-            textZoom.text =
-                getString(R.string.rotate_scale, ((settings.zoom - 1) * 10).toInt())
-            textRotationSpeed.text =
-                getString(R.string.rotate_speed, (settings.rotation_speed * 10).toInt())
-            textBlur.text = getString(R.string.player_blur, settings.blur)
-            return MaterialAlertDialogBuilder(requireActivity())
-                .setView(view)
-                .setCancelable(true)
-                .setNegativeButton(R.string.button_cancel, null)
-                .setNeutralButton(R.string.set_default) { _, _ ->
-                    Settings.get()
-                        .main().playerCoverBackgroundSettings =
-                        PlayerCoverBackgroundSettings().set_default()
-                    parentFragmentManager.setFragmentResult(
-                        PreferencesExtra.RECREATE_ACTIVITY_REQUEST,
-                        Bundle
+            TempDataHelper.helper.clear()
+            cleanTmpFileCache(activity, true)
+            Includes.stores.stickers().clearAccount(accountId).syncSingleSafe()
+            Includes.stores.tempStore().clearReactionAssets(accountId)
+                .syncSingleSafe()
+            Utils.clearReactionAssets(accountId)
+            activity.recreate()
+        }
+    }
+}
