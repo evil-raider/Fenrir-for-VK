@@ -1436,7 +1436,7 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
             }
 
             pref("full_audio_sync_now") {
-                titleRes = R.string.sync
+                title = "Ручной запуск"
                 iconRes = R.drawable.sync_settings
                 dependency = "auto_download_music_enable"
                 onClick {
