@@ -61,7 +61,7 @@ import java.util.concurrent.TimeUnit
  * пропускает попытку (Result.success()) и повторит её через сутки. Не
  * запускается при заходе в «Мою музыку».
  *
- * Ручной запуск (кнопка «Синхронизировать сейчас», см. enqueueManualSync)
+ * Ручной запуск (кнопка «Ручной запуск», см. enqueueManualSync)
  * передаёт во входные данные флаг INPUT_KEY_MANUAL=true — в этом режиме
  * условия Wi-Fi и зарядки НЕ проверяются, так как пользователь запросил
  * синхронизацию явно. Условие включённого автоскачивания и наличия аккаунта
@@ -70,10 +70,12 @@ import java.util.concurrent.TimeUnit
  * Воркер сам проходит все страницы «Моей музыки», собирает список ещё не
  * скачанных треков и последовательно скачивает каждый (mp3 + обложка + ID3-теги
  * + регистрация), поддерживая ОДНО foreground-уведомление с прогрессом X / N.
- * Если трек скачать не удалось (недоступен онлайн и т.п.) — показывается ЕДИНОЕ
- * уведомление «отсутствует локальная копия недоступного онлайн файла»
- * (MissingTrackNotifier) — такое же, как в плеере и прозрачном кэшировании.
- * Идемпотентность — TrackIsDownloaded(audio) == 0.
+ * Уведомление «отсутствует локальная копия» (MissingTrackNotifier) показывается
+ * ТОЛЬКО когда трек недоступен для воспроизведения навсегда — то есть после
+ * дорезолва ссылка пустая (запрет правообладателя). Временные сбои (сетевые
+ * ошибки, HTTP, незагруженный нативный модуль для HLS) НЕ порождают уведомление:
+ * трек остаётся нескачанным (TrackIsDownloaded==0) и будет повторён при следующем
+ * суточном прогоне. Идемпотентность — TrackIsDownloaded(audio) == 0.
  *
  * DEBUG (диагностика '100/506'): весь прогон пишется в logcat (тег
  * FullAudioSync) и в файл на устройстве (getExternalFilesDir/full_sync_debug_*.log)
@@ -222,7 +224,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     }
 
     private fun doWorkInner(): Result {
-        // Ручной запуск (кнопка «Синхронизировать сейчас») игнорирует условия
+        // Ручной запуск (кнопка «Ручной запуск») игнорирует условия
         // Wi-Fi/зарядки — раз пользователь запросил синхронизацию явно, ждать
         // подходящих условий не нужно. Время (TARGET_HOUR) в doWork вообще не
         // проверяется — оно влияет только на первоначальную задержку периодической
@@ -369,10 +371,13 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     /**
      * Скачивает один трек в папку музыки, пишет ID3-теги и обложку и
      * регистрирует его в реестре скачанного. Если скачать не удалось
-     * (трек недоступен онлайн или ошибка сети) — показывает единое
-     * уведомление «отсутствует локальная копия» (MissingTrackNotifier).
+     * из-за запрета на воспроизведение (пустая ссылка после дорезолва) —
+     * показывает единое уведомление «отсутствует локальная копия»
+     * (MissingTrackNotifier). Временные сбои (сеть, HTTP, нет нативного
+     * модуля для HLS) уведомление НЕ показывают — такой трек остаётся
+     * нескачанным и будет повторён при следующем суточном прогоне.
      * HLS-треки скачиваются через M3U8 + TSDemuxer (нативный модуль);
-     * если модуль не загружен — трек считается недоступным.
+     * если модуль не загружен — трек считается временно недоступным.
      *
      * DEBUG: возвращает строку-причину для сводки (ok / empty_url /
      * hls_no_native / download_failed_hls / download_failed_raw / stopped).
@@ -407,16 +412,20 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
         val url = audio.url
         if (url.isNullOrEmpty()) {
-            // Трек недоступен онлайн — локальной копии не будет, сообщаем ожидаемое имя файла.
-            log("    -> FAIL: url empty after refresh; MissingTrackNotifier")
+            // Пустая ссылка после дорезолва = трек заблокирован/недоступен для
+            // воспроизведения (запрет правообладателя). Это ЕДИНСТВЕННЫЙ случай,
+            // который никогда не станет доступен сам по себе, поэтому именно здесь
+            // показываем уведомление «отсутствует локальная копия».
+            log("    -> FAIL: url empty after refresh (playback ban -> notify)")
             MissingTrackNotifier.show(applicationContext, audio)
             return "empty_url"
         }
 
-        // HLS без нативного модуля распаковать невозможно.
+        // HLS без нативного модуля распаковать невозможно. Это не запрет
+        // на воспроизведение, а временная проблема на стороне приложения —
+        // уведомление не показываем, трек будет повторён при следующем прогоне.
         if (audio.isHLS && !FenrirNative.isNativeLoaded) {
-            log("    -> FAIL: HLS but native module not loaded; MissingTrackNotifier")
-            MissingTrackNotifier.show(applicationContext, audio)
+            log("    -> FAIL: HLS but native module not loaded (no notify, will retry)")
             return "hls_no_native"
         }
 
@@ -430,8 +439,11 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         val ok = if (isHls) downloadHls(url, dir, baseName, target) else downloadRaw(url, target)
         if (!ok) {
             if (!isStopped) {
-                log("    -> FAIL: download returned false (branch=" + (if (isHls) "HLS" else "RAW") + "); MissingTrackNotifier")
-                MissingTrackNotifier.show(applicationContext, audio)
+                // Сетевая/серверная ошибка при наличии ссылки — это НЕ запрет на
+                // воспроизведение. Трек остаётся нескачанным (TrackIsDownloaded==0),
+                // поэтому будет повторён при следующем суточном прогоне. Уведомление
+                // не показываем, чтобы не спамить о временных сбоях.
+                log("    -> FAIL: download returned false (branch=" + (if (isHls) "HLS" else "RAW") + ") (no notify, will retry)")
             } else {
                 log("    -> STOPPED during download")
             }
@@ -577,7 +589,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
         /**
          * Запускает синхронизацию немедленно по требованию пользователя (кнопка
-         * «Синхронизировать сейчас»). В отличие от периодического запуска по
+         * «Ручной запуск»). В отличие от периодического запуска по
          * расписанию, ручной прогон игнорирует условия Wi-Fi и зарядки — см.
          * doWorkInner(). Условия «включено автоскачивание» и «есть аккаунт»
          * всё равно проверяются.
