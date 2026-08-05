@@ -1440,8 +1440,7 @@ class PreferencesFragment : AbsPreferencesFragment(), PreferencesAdapter.OnScree
                 iconRes = R.drawable.sync_settings
                 dependency = "auto_download_music_enable"
                 onClick {
-                    val fullSyncWork = OneTimeWorkRequest.Builder(FullAudioSyncWorker::class)
-                    WorkManager.getInstance(requireActivity()).enqueue(fullSyncWork.build())
+                    FullAudioSyncWorker.enqueueManualSync(requireActivity())
                     CustomSnackbars.createCustomSnackbars(view)
                         ?.setDurationSnack(Snackbar.LENGTH_LONG)
                         ?.themedSnack(R.string.later)
