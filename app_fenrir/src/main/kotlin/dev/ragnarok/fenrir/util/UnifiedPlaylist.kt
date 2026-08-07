@@ -1,9 +1,12 @@
 package dev.ragnarok.fenrir.util
 
+import android.net.Uri
 import dev.ragnarok.fenrir.db.Stores
 import dev.ragnarok.fenrir.model.Audio
+import dev.ragnarok.fenrir.settings.Settings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -78,14 +81,71 @@ object UnifiedPlaylist {
     }
 
     /**
-     * Ищет локальную копию удалённого/заблокированного VK-трека по artist+title в последнем
-     * снимке локальных треков. Возвращает null, если снимок ещё не прогрет (тогда вызывающий
-     * код должен сохранить прежнее поведение) или совпадения нет.
+     * Ищет локальную копию удалённого/заблокированного VK-трека по artist+title.
+     *
+     * FENRIR-CI (fix бага «вставленная вручную копия не играет, пока 3-4 раза не обновить
+     * список»): раньше единственным источником фолбэка был localCache, который наполняется
+     * ТОЛЬКО при сканировании списка «Моя музыка + офлайн» (warmCache / appendLocalOnly из
+     * AudiosPresenter.mergeLocalUnified). Пока пользователь не открыл/не обновил этот список,
+     * вручную добавленный в папку файл в кэш не попадал → makeMediaSource его не находил и
+     * подставлял заглушку audio_error.ogg (те самые ~3 секунды). После нескольких обновлений
+     * список пересканировался, кэш прогревался — и трек «внезапно» находился. Это не совпадение
+     * и не «прошло время», а именно отложенный прогрев кэша.
+     *
+     * Теперь при промахе кэша сначала ищем файл СИНХРОННО и детерминированно — по тому же имени,
+     * которое указано в уведомлении MissingTrackNotifier и по которому качает DownloadWorkUtils
+     * (GetLocalTrackLink): makeLegalFilename("Исполнитель - Название") + "." + ext, в папке
+     * скачанной музыки (musicDir) и в дополнительной локальной папке (localAudioFolderA). Это
+     * дешёвые File.exists() (stat), безопасные на main-thread — там же уже вызывается
+     * File(...).exists() для основной локальной копии. Тяжёлый рекурсивный скан с чтением ID3
+     * сюда НЕ выносим (иначе ANR при построении очереди в setSources).
+     *
+     * Если по имени файл не найден (например, лежит во вложенной подпапке или переименован не по
+     * шаблону) — как и раньше пробуем прогретый кэш (совпадение по ID3-тегам artist|title),
+     * сохраняя прежнее поведение как запасной путь.
      */
     fun findLocalFallback(audio: Audio): Audio? {
         if (audio.artist.isNullOrEmpty() && audio.title.isNullOrEmpty()) {
             return null
         }
+        probeLocalFileByName(audio)?.let { return it }
         return localCache[mergeKey(audio)]
+    }
+
+    /**
+     * Дешёвый детерминированный поиск локального файла по ожидаемому имени в корне папок
+     * musicDir и localAudioFolderA. Возвращает минимальный Audio с url=file://... (метаданные
+     * для проигрывания берутся из исходного трека в makeMediaSource), либо null.
+     */
+    private fun probeLocalFileByName(audio: Audio): Audio? {
+        val baseName = DownloadWorkUtils.makeLegalFilename(
+            (audio.artist ?: "") + " - " + (audio.title ?: ""), null
+        )
+        if (baseName.isEmpty()) {
+            return null
+        }
+        val main = Settings.get().main()
+        val folders = LinkedHashSet<String>()
+        main.musicDir.let { if (it.isNotEmpty()) folders.add(it) }
+        main.localAudioFolderA?.let { if (it.isNotEmpty()) folders.add(it) }
+        if (folders.isEmpty()) {
+            return null
+        }
+        val exts = LinkedHashSet<String>()
+        // .mp3 — именно так называет файл скачивание и уведомление MissingTrackNotifier.
+        exts.add("mp3")
+        exts.addAll(main.audioExt)
+        for (folder in folders) {
+            for (ext in exts) {
+                if (ext.isEmpty()) {
+                    continue
+                }
+                val f = File(folder, "$baseName.$ext")
+                if (f.isFile) {
+                    return Audio().setUrl(Uri.fromFile(f).toString())
+                }
+            }
+        }
+        return null
     }
 }
