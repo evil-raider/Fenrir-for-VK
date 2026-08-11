@@ -34,6 +34,10 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object UnifiedPlaylist {
 
+    // Максимальная глубина рекурсивного поиска локальной копии по подпапкам —
+    // тот же лимит, что в LocalAudioFolderScanner (защита от глубоких/циклических деревьев).
+    private const val MAX_PROBE_DEPTH = 12
+
     private val localCache = ConcurrentHashMap<String, Audio>()
 
     private fun mergeKey(a: Audio): String {
@@ -85,24 +89,14 @@ object UnifiedPlaylist {
      *
      * FENRIR-CI (fix бага «вставленная вручную копия не играет, пока 3-4 раза не обновить
      * список»): раньше единственным источником фолбэка был localCache, который наполняется
-     * ТОЛЬКО при сканировании списка «Моя музыка + офлайн» (warmCache / appendLocalOnly из
-     * AudiosPresenter.mergeLocalUnified). Пока пользователь не открыл/не обновил этот список,
-     * вручную добавленный в папку файл в кэш не попадал → makeMediaSource его не находил и
-     * подставлял заглушку audio_error.ogg (те самые ~3 секунды). После нескольких обновлений
-     * список пересканировался, кэш прогревался — и трек «внезапно» находился. Это не совпадение
-     * и не «прошло время», а именно отложенный прогрев кэша.
+     * ТОЛЬКО при сканировании списка «Моя музыка + офлайн». Пока пользователь не открыл
+     * этот список, вручную добавленный файл в кэш не попадал → makeMediaSource его не находил
+     * и подставлял заглушку audio_error.ogg.
      *
-     * Теперь при промахе кэша сначала ищем файл СИНХРОННО и детерминированно — по тому же имени,
-     * которое указано в уведомлении MissingTrackNotifier и по которому качает DownloadWorkUtils
-     * (GetLocalTrackLink): makeLegalFilename("Исполнитель - Название") + "." + ext, в папке
-     * скачанной музыки (musicDir) и в дополнительной локальной папке (localAudioFolderA). Это
-     * дешёвые File.exists() (stat), безопасные на main-thread — там же уже вызывается
-     * File(...).exists() для основной локальной копии. Тяжёлый рекурсивный скан с чтением ID3
-     * сюда НЕ выносим (иначе ANR при построении очереди в setSources).
-     *
-     * Если по имени файл не найден (например, лежит во вложенной подпапке или переименован не по
-     * шаблону) — как и раньше пробуем прогретый кэш (совпадение по ID3-тегам artist|title),
-     * сохраняя прежнее поведение как запасной путь.
+     * При промахе кэша сначала ищем файл СИНХРОННО и детерминированно (findLocalFileByName):
+     * по тому же имени, что указано в уведомлении MissingTrackNotifier и по которому
+     * качает DownloadWorkUtils. Если по имени файл не найден — как и раньше пробуем
+     * прогретый кэш (совпадение по ID3-тегам artist|title).
      */
     fun findLocalFallback(audio: Audio): Audio? {
         if (audio.artist.isNullOrEmpty() && audio.title.isNullOrEmpty()) {
@@ -112,14 +106,30 @@ object UnifiedPlaylist {
         return localCache[mergeKey(audio)]
     }
 
-    /**
-     * Дешёвый детерминированный поиск локального файла по ожидаемому имени в корне папок
-     * musicDir и localAudioFolderA. Возвращает минимальный Audio с url=file://... (метаданные
-     * для проигрывания берутся из исходного трека в makeMediaSource), либо null.
-     */
     private fun probeLocalFileByName(audio: Audio): Audio? {
+        val f = findLocalFileByName(audio.artist, audio.title) ?: return null
+        return Audio().setUrl(Uri.fromFile(f).toString())
+    }
+
+    /**
+     * Детерминированный поиск локального файла по ожидаемому имени
+     * (makeLegalFilename("Исполнитель - Название") + расширение) в папках musicDir и
+     * localAudioFolderA. Сначала — дешёвая проверка в КОРНЕ папок, затем, при промахе,
+     * ограниченный рекурсивный обход подпапок (только сравнение имён файлов, без чтения
+     * ID3 — поэтому безопасно и на main-thread: тяжёлый MediaMetadataRetriever здесь не
+     * вызывается). Возвращает найденный File или null.
+     *
+     * FENRIR-CI (fix бага «файл во вложенной подпапке не находится»): раньше проверялся
+     * только корень папок, из-за чего локальная копия недоступного трека, положенная во
+     * вложенную подпапку, не находилась — плеер играл заглушку audio_error.ogg, а ночная
+     * синхронизация каждую ночь показывала ложное уведомление «отсутствует локальная копия».
+     */
+    fun findLocalFileByName(artist: String?, title: String?): File? {
+        if (artist.isNullOrEmpty() && title.isNullOrEmpty()) {
+            return null
+        }
         val baseName = DownloadWorkUtils.makeLegalFilename(
-            (audio.artist ?: "") + " - " + (audio.title ?: ""), null
+            (artist ?: "") + " - " + (title ?: ""), null
         )
         if (baseName.isEmpty()) {
             return null
@@ -135,15 +145,51 @@ object UnifiedPlaylist {
         // .mp3 — именно так называет файл скачивание и уведомление MissingTrackNotifier.
         exts.add("mp3")
         exts.addAll(main.audioExt)
+        exts.remove("")
+        // Быстрый путь — файл прямо в корне папки (прежнее поведение).
         for (folder in folders) {
             for (ext in exts) {
-                if (ext.isEmpty()) {
-                    continue
-                }
                 val f = File(folder, "$baseName.$ext")
                 if (f.isFile) {
-                    return Audio().setUrl(Uri.fromFile(f).toString())
+                    return f
                 }
+            }
+        }
+        // Медленный путь — рекурсивный обход подпапок по имени файла.
+        val targetNames = HashSet<String>()
+        for (ext in exts) {
+            targetNames.add("$baseName.$ext".lowercase(Locale.getDefault()))
+        }
+        for (folder in folders) {
+            val root = File(folder)
+            if (!root.isDirectory) {
+                continue
+            }
+            searchByNameRecursive(root, targetNames, 0)?.let { return it }
+        }
+        return null
+    }
+
+    private fun searchByNameRecursive(
+        dir: File,
+        targetNames: Set<String>,
+        depth: Int
+    ): File? {
+        if (depth > MAX_PROBE_DEPTH) {
+            return null
+        }
+        val children = dir.listFiles() ?: return null
+        // Сначала файлы текущего уровня — дешевле, чем сразу спускаться в подпапки.
+        for (f in children) {
+            if (f.isFile && !f.isHidden &&
+                targetNames.contains(f.name.lowercase(Locale.getDefault()))
+            ) {
+                return f
+            }
+        }
+        for (f in children) {
+            if (f.isDirectory && !f.isHidden) {
+                searchByNameRecursive(f, targetNames, depth + 1)?.let { return it }
             }
         }
         return null
