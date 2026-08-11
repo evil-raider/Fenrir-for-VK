@@ -52,45 +52,20 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * FENRIR-CI (Этап 4): фоновый Worker полной автозагрузки всей «Моей музыки».
+ * FENRIR-CI (Этап 4): фоновый Worker полной автозагрузки всей «Моей музыки» (ежедневно ~5:00).
  *
- * Работает как ЕЖЕДНЕВНАЯ периодическая задача (примерно в 5:00). При запуске
- * внутри doWork проверяет условия: включено ли автоскачивание, есть ли активный
- * аккаунт, есть ли Wi-Fi (если задано «только по Wi-Fi») и подключено ли зарядное
- * устройство (если включено «только при зарядке»). Если условие не выполнено — молча
- * пропускает попытку (Result.success()) и повторит её через сутки. Не
- * запускается при заходе в «Мою музыку».
- *
- * Ручной запуск (кнопка «Ручной запуск», см. enqueueManualSync)
- * передаёт во входные данные флаг INPUT_KEY_MANUAL=true — в этом режиме
- * условия Wi-Fi и зарядки НЕ проверяются, так как пользователь запросил
- * синхронизацию явно. Условие включённого автоскачивания и наличия аккаунта
- * при этом остаётся в силе.
- *
- * Воркер сам проходит все страницы «Моей музыки», собирает список ещё не
- * скачанных треков и последовательно скачивает каждый (mp3 + обложка + ID3-теги
- * + регистрация), поддерживая ОДНО foreground-уведомление с прогрессом X / N.
- * Уведомление «отсутствует локальная копия» (MissingTrackNotifier) показывается
- * ТОЛЬКО когда трек недоступен для воспроизведения навсегда — то есть после
- * дорезолва ссылка пустая (запрет правообладателя) И нет локальной копии на диске.
- * Временные сбои (сетевые ошибки, HTTP, незагруженный нативный модуль для HLS)
- * НЕ порождают уведомление: трек остаётся нескачанным (TrackIsDownloaded==0) и будет
- * повторён при следующем суточном прогоне. Идемпотентность — TrackIsDownloaded(audio) == 0.
- *
- * DEBUG (диагностика '100/506'): весь прогон пишется в logcat (тег
- * FullAudioSync) и в файл на устройстве (getExternalFilesDir/full_sync_debug_*.log)
- * с построчным flush. Логика скачивания и пагинации при этом НЕ изменена —
- * добавлено только логирование, чтобы за один ночной проход увидеть причину.
+ * Уведомление «отсутствует локальная копия» (MissingTrackNotifier) показывается ТОЛЬКО
+ * когда трек недоступен для воспроизведения навсегда (после дорезолва ссылка пустая —
+ * запрет правообладателя) И нет локальной копии на диске (включая подпапки).
+ * Временные сбои (сеть, HTTP, нет нативного модуля для HLS) уведомление НЕ показывают.
  */
 class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     Worker(context, workerParams) {
 
     private val audioInteractor: IAudioInteractor = InteractorFactory.createAudioInteractor()
 
-    // Канал уведомлений создаём один раз за запуск воркера, а не на каждый тик прогресса.
     private var channelCreated = false
 
-    // --- DEBUG logging infra ------------------------------------------------
     private val logTimeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private var logWriter: Writer? = null
 
@@ -123,7 +98,6 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             w.write(logTimeFmt.format(Date()) + "  " + msg + "\n")
             w.flush()
         } catch (_: Throwable) {
-            // Логирование не должно влиять на скачивание.
         }
     }
 
@@ -136,7 +110,6 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         logWriter = null
     }
 
-    /** Классификация ссылки трека для диагностики (без раскрытия токенов в имени класса). */
     private fun classifyUrl(url: String?): String {
         return when {
             url.isNullOrEmpty() -> "EMPTY"
@@ -150,7 +123,6 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     private fun inc(map: HashMap<String, Int>, key: String) {
         map[key] = (map[key] ?: 0) + 1
     }
-    // -----------------------------------------------------------------------
 
     private fun ensureChannel() {
         if (channelCreated) {
@@ -224,13 +196,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
     }
 
     private fun doWorkInner(): Result {
-        // Ручной запуск (кнопка «Ручной запуск») игнорирует условия
-        // Wi-Fi/зарядки — раз пользователь запросил синхронизацию явно, ждать
-        // подходящих условий не нужно. Время (TARGET_HOUR) в doWork вообще не
-        // проверяется — оно влияет только на первоначальную задержку периодической
-        // задачи при schedule().
         val manual = inputData.getBoolean(INPUT_KEY_MANUAL, false)
-        // Автоскачивание выключено — тихо выходим.
         if (!Settings.get().main().isAutoDownload_music) {
             log("GATE: autoDownload disabled -> exit")
             return Result.success()
@@ -241,16 +207,10 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             return Result.success()
         }
         log("accountId=" + accountId + ", manual=" + manual)
-        // Условие Wi-Fi (если включено «только по Wi-Fi») — иначе пропускаем до следующих суток.
-        // Для ручного запуска не проверяется.
         if (!manual && Settings.get().main().isAutoDownload_music_wifi_only && !isWifiConnected()) {
             log("GATE: wifiOnly but no wifi -> exit")
             return Result.success()
         }
-        // Условие зарядки — опциональное (по умолчанию требуется). Управляется
-        // тумблером auto_download_music_charging_only в настройках. Если включено
-        // и питания нет — не тратим заряд, пробуем через сутки. Для ручного
-        // запуска не проверяется.
         if (!manual && Settings.get().main().isAutoDownload_music_charging_only && !isCharging()) {
             log("GATE: chargingOnly but not charging -> exit")
             return Result.success()
@@ -258,10 +218,6 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
         setForegroundAsync(buildForeground(progressText(0, 0)))
 
-        // Фаза 1: собрать все ещё не скачанные треки «Моей музыки».
-        // Пагинация завершается только через data.isEmpty() — VK может вернуть меньше
-        // PAGE_COUNT треков на промежуточной странице (скрытые правообладателями),
-        // поэтому break по data.size < PAGE_COUNT был бы преждевременным.
         log("=== PHASE 1: scanning My Music (PAGE_COUNT=" + PAGE_COUNT + ", MAX_PAGES=" + MAX_PAGES + ") ===")
         val toDownload = ArrayList<Audio>()
         val toDownloadIdx = ArrayList<Int>()
@@ -327,7 +283,6 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
 
         CheckDirectory(Settings.get().main().musicDir)
 
-        // Фаза 2: последовательное скачивание с единым прогресс-уведомлением.
         log("=== PHASE 2: downloading " + total + " tracks ===")
         var done = 0
         var success = 0
@@ -362,4 +317,245 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         }
         setForegroundAsync(buildForeground(progressText(done, total)))
         log(
-            "=== P
+            "=== PHASE 2 done: processed=" + done + ", success=" + success +
+                ", failures=" + (done - success) + ", failByReason=" + failByReason + " ==="
+        )
+        return Result.success()
+    }
+
+    private fun downloadOne(audio: Audio, accountId: Long): String {
+        val urlBefore = audio.url
+        val mode = audio.needRefresh()
+        log(
+            "    needRefresh: first=" + mode.first + ", second(old)=" + mode.second +
+                ", urlBeforeClass=" + classifyUrl(urlBefore) + ", isHLS=" + audio.isHLS
+        )
+        if (mode.first) {
+            log("    re-resolving via getByIdOld(old=" + mode.second + ") ...")
+            val link: String? = InteractorFactory
+                .createAudioInteractor()
+                .getByIdOld(accountId, listOf(audio), mode.second)
+                .map { e ->
+                    e[0].url.nonNullNoEmpty({ l -> l }, { audio.url.orEmpty() })
+                }.syncSingleSafe(audio.url)
+            if (link.nonNullNoEmpty()) {
+                log(
+                    "    re-resolve returned urlClass=" + classifyUrl(link) +
+                        ", changed=" + (link != urlBefore)
+                )
+                audio.setUrl(link)
+            } else {
+                log("    re-resolve returned empty/null (kept urlClass=" + classifyUrl(audio.url) + ")")
+            }
+        }
+
+        val url = audio.url
+        if (url.isNullOrEmpty()) {
+            // FENRIR-CI (fix ложного «отсутствует локальная копия» для файла во вложенной
+            // подпапке): пустая ссылка после дорезолва = трек заблокирован/недоступен онлайн
+            // навсегда. Но пользователь мог положить локальную копию вручную, в т.ч. НЕ в корень,
+            // а во вложенную подпапку. Прежняя проверка (TrackIsDownloaded / реестр tracksExist)
+            // видит только файл в корне с именем "<baseName>.mp3" → копию в подпапке не
+            // находила → каждую ночь показывалось ложное уведомление. Теперь перед уведомлением
+            // ищем копию рекурсивно (тот же поиск, что у плеера в UnifiedPlaylist).
+            val localCopy = UnifiedPlaylist.findLocalFileByName(audio.artist, audio.title)
+            if (localCopy != null) {
+                val canonicalName = makeLegalFilename(audio.artist + " - " + audio.title, "mp3")
+                MusicPlaybackController.tracksExist.addAudio(canonicalName)
+                log("    -> url empty, but local copy exists: " + localCopy.absolutePath + " (registered, no notify)")
+                return "local_exists"
+            }
+            log("    -> FAIL: url empty after refresh (playback ban -> notify)")
+            MissingTrackNotifier.show(applicationContext, audio)
+            return "empty_url"
+        }
+
+        if (audio.isHLS && !FenrirNative.isNativeLoaded) {
+            log("    -> FAIL: HLS but native module not loaded (no notify, will retry)")
+            return "hls_no_native"
+        }
+
+        val dir = Settings.get().main().musicDir
+        val baseName = makeLegalFilename(audio.artist + " - " + audio.title, null)
+        val fileName = "$baseName.mp3"
+        val target = File(dir, fileName)
+
+        val isHls = audio.isHLS
+        log("    downloading: branch=" + (if (isHls) "HLS" else "RAW") + ", urlClass=" + classifyUrl(url))
+        val ok = if (isHls) downloadHls(url, dir, baseName, target) else downloadRaw(url, target)
+        if (!ok) {
+            if (!isStopped) {
+                log("    -> FAIL: download returned false (branch=" + (if (isHls) "HLS" else "RAW") + ") (no notify, will retry)")
+            } else {
+                log("    -> STOPPED during download")
+            }
+            return if (isStopped) "stopped" else if (isHls) "download_failed_hls" else "download_failed_raw"
+        }
+
+        val cover = Utils.firstNonEmptyString(
+            audio.thumb_image_very_big,
+            audio.thumb_image_big,
+            audio.thumb_image_little
+        )
+        if (FenrirNative.isNativeLoaded && cover.nonNullNoEmpty()) {
+            val coverFile = File(dir, "$baseName.jpg")
+            if (downloadRaw(cover, coverFile)) {
+                try {
+                    val ifGenre = if (audio.genreByID3 != 0) audio.genreByID3.toString() else null
+                    val commentText = Audio.AudioCommentTag(audio.ownerId, audio.id).toText()
+                    FileUtils.audioTagModify(
+                        target.absolutePath,
+                        coverFile.absolutePath,
+                        "image/jpg",
+                        audio.title,
+                        audio.artist,
+                        audio.album_title,
+                        ifGenre,
+                        commentText
+                    )
+                } catch (e: Throwable) {
+                    log("    tag/cover error (non-fatal): " + e.message)
+                    e.printStackTrace()
+                } finally {
+                    if (coverFile.exists()) {
+                        coverFile.delete()
+                    }
+                }
+            }
+        }
+
+        MusicPlaybackController.tracksExist.addAudio(fileName)
+        applicationContext.sendBroadcast(
+            @Suppress("deprecation")
+            Intent(
+                Intent.ACTION_MEDIA_SCANNER_SCAN_FILE,
+                Uri.fromFile(target)
+            )
+        )
+        log("    -> OK: saved " + fileName)
+        return "ok"
+    }
+
+    private fun downloadHls(url: String, dir: String, baseName: String, target: File): Boolean {
+        val ts = File(dir, "$baseName.ts")
+        return try {
+            if (!M3U8(url, ts.absolutePath).run()) {
+                throw Exception("M3U8 error download")
+            }
+            if (!TSDemuxer.unpackTS(
+                    ts.absolutePath,
+                    target.absolutePath,
+                    info = false,
+                    print_debug = false
+                )
+            ) {
+                throw Exception("Error TSDemuxer")
+            }
+            true
+        } catch (e: Exception) {
+            log("      downloadHls exception: " + e.message)
+            e.printStackTrace()
+            if (target.exists()) {
+                target.delete()
+            }
+            false
+        } finally {
+            if (ts.exists()) {
+                ts.delete()
+            }
+        }
+    }
+
+    private fun downloadRaw(url: String?, target: File): Boolean {
+        if (url.isNullOrEmpty()) {
+            log("      downloadRaw: url null/empty")
+            return false
+        }
+        var success = false
+        try {
+            val client = Utils.createOkHttp(Constants.DOWNLOAD_TIMEOUT, false).build()
+            val request: Request = Request.Builder().url(url).build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    log("      downloadRaw: HTTP " + response.code + " " + response.message + " urlClass=" + classifyUrl(url))
+                }
+                if (response.isSuccessful) {
+                    FileOutputStream(target).use { output ->
+                        BufferedInputStream(response.body.byteStream()).use { input ->
+                            val buffer = ByteArray(80 * 1024)
+                            var len: Int
+                            while (input.read(buffer).also { len = it } != -1) {
+                                if (isStopped) {
+                                    return@use
+                                }
+                                output.write(buffer, 0, len)
+                            }
+                            success = true
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            log("      downloadRaw exception: " + e.message)
+            e.printStackTrace()
+            success = false
+        }
+        if (!success && target.exists()) {
+            target.delete()
+        }
+        return success
+    }
+
+    companion object {
+        private const val LOG_TAG = "FullAudioSync"
+        private const val UNIQUE_NAME = "full_my_music_sync"
+        private const val PAGE_COUNT = 100
+        private const val MAX_PAGES = 1000
+        private const val NOTIFICATION_FULL_SYNC = 4823
+        private const val FOREGROUND_CHANNEL_ID = "worker_channel"
+        private const val TARGET_HOUR = 5
+        private const val INPUT_KEY_MANUAL = "manual"
+
+        fun enqueueManualSync(context: Context) {
+            val data = Data.Builder()
+                .putBoolean(INPUT_KEY_MANUAL, true)
+                .build()
+            val request = OneTimeWorkRequest.Builder(FullAudioSyncWorker::class)
+                .setInputData(data)
+                .build()
+            WorkManager.getInstance(context).enqueue(request)
+        }
+
+        fun schedule() {
+            val context = Includes.provideApplicationContext()
+            val wm = WorkManager.getInstance(context)
+            if (!Settings.get().main().isAutoDownload_music) {
+                wm.cancelUniqueWork(UNIQUE_NAME)
+                return
+            }
+            val request = PeriodicWorkRequest.Builder(
+                FullAudioSyncWorker::class.java, 1, TimeUnit.DAYS
+            )
+                .setInitialDelay(initialDelayMillisToHour(TARGET_HOUR), TimeUnit.MILLISECONDS)
+                .build()
+            wm.enqueueUniquePeriodicWork(
+                UNIQUE_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                request
+            )
+        }
+
+        private fun initialDelayMillisToHour(targetHour: Int): Long {
+            val now = Calendar.getInstance()
+            val next = Calendar.getInstance()
+            next.set(Calendar.HOUR_OF_DAY, targetHour)
+            next.set(Calendar.MINUTE, 0)
+            next.set(Calendar.SECOND, 0)
+            next.set(Calendar.MILLISECOND, 0)
+            if (!next.after(now)) {
+                next.add(Calendar.DAY_OF_YEAR, 1)
+            }
+            return next.timeInMillis - now.timeInMillis
+        }
+    }
+}
