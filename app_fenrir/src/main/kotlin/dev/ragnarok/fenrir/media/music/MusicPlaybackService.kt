@@ -785,28 +785,11 @@ class MusicPlaybackService : MediaSessionService() {
                         val accountId = Settings.get().accounts().current
                         val audio = mediaItem?.localConfiguration?.tag as? Audio
                         if (audio != null && !Utils.isHiddenAccount(accountId) && !audio.isLocalServer && !audio.isLocal) {
-                            // FENRIR-CI (доводка): трек недоступен онлайн (удалён/заблокирован) и локальной
-                            // копии не нашлось — makeMediaSource подставила заглушку audio_error.ogg.
-                            // Показываем уведомление именно в момент перехода на этот трек, а не при
-                            // построении очереди (setSources строит источники для ВСЕХ треков сразу).
                             if (mediaItem.localConfiguration?.uri?.toString()
                                     ?.contains("audio_error.ogg") == true
                             ) {
                                 mService.get()?.notifyTrackUnavailable(audio)
                             }
-                            // FENRIR-CI: transparent caching — сохраняем проигрываемый онлайн-трек в папку VK и регистрируем его
-                            // FENRIR-CI (fix): 1) раньше стояло условие !audio.isHLS, из-за которого кэширование
-                            // молча пропускало ВСЕ HLS-треки (index.m3u8) — а VK отдаёт большинство треков именно
-                            // как HLS. Воркер умеет качать HLS (M3U8+TSDemuxer) при загруженном
-                            // нативном модуле, а при включённом api 5.90 сам перезапрашивает прямую mp3-ссылку,
-                            // поэтому HLS пропускаем только когда его реально нечем скачать.
-                            // 2) проверка TrackIsDownloaded == 0 опиралась на кэш имён в памяти (CachedAudios/
-                            // RemoteAudios), который бывает устаревшим или ложноположительным (совпадение
-                            // "Artist - Title", смена папки, удаление файла мимо приложения) — заменена на
-                            // реальную проверку наличия файла на диске, как в makeMediaSource выше.
-                            // 3) кэширование идёт через тихий TransparentCacheWorker (одно беззвучное
-                            // уведомление на время скачивания, убирается по завершении) вместо штатного
-                            // TrackDownloadWorker с его громкими heads-up уведомлениями на каждый трек.
                             if (Settings.get().main().isForce_cache
                                 && (!audio.isHLS || FenrirNative.isNativeLoaded || Settings.get()
                                     .main().isUse_api_5_90_for_audio)
@@ -1380,4 +1363,57 @@ class MusicPlaybackService : MediaSessionService() {
         const val META_CHANGED = "dev.ragnarok.fenrir.media.music.meta_changed"
         const val TRACK_CHANGED = "dev.ragnarok.fenrir.media.music.track_changed"
         const val PREPARED = "dev.ragnarok.fenrir.media.music.prepared"
-        const
+        const val SHUFFLE_NONE = 0
+        const val SHUFFLE = 1
+        const val REPEAT_MODE_CHANGED = "dev.ragnarok.fenrir.media.music.repeat_mode_changed"
+        const val SHUFFLE_MODE_CHANGED = "dev.ragnarok.fenrir.media.music.shuffle_mode_changed"
+        const val QUEUE_CHANGED = "dev.ragnarok.fenrir.media.music.queue_changed"
+        const val REFRESH = "dev.ragnarok.fenrir.media.music.refresh"
+
+        const val CUSTOM_COMMAND_CLOSE = "dev.ragnarok.fenrir.media.music.custom_command_close"
+        const val CUSTOM_COMMAND_DISABLE_REPEAT =
+            "dev.ragnarok.fenrir.media.music.custom_command_disable_repeat"
+        const val CUSTOM_COMMAND_REPEAT_MODE_ONCE =
+            "dev.ragnarok.fenrir.media.music.custom_command_repeat_mode_once"
+        const val CUSTOM_COMMAND_REPEAT_MODE_ALL =
+            "dev.ragnarok.fenrir.media.music.custom_command_repeat_mode_all"
+
+        const val PREFS_REPEAT =
+            "music_playback_repeat"
+        const val PREFS_SHUFFLE =
+            "music_playback_shuffle"
+
+        const val ACTION_PLAYLIST = "start_playlist"
+        const val MAX_QUEUE_SIZE = 200
+
+        // FENRIR-CI: полный список треков передаётся в процессе (см. pendingQueue), а НЕ через
+        // Intent — иначе сотни Audio-объектов переполняют Binder-транзакцию (~1MB,
+        // TransactionTooLargeException), из-за чего раньше очередь резалась окном в 200 треков
+        // и шафл «случайно» крутился только внутри ~200. Теперь очередь целиком, шафл — по всем.
+        @Volatile
+        private var pendingQueue: List<Audio>? = null
+
+        private fun consumePendingQueue(): List<Audio>? {
+            val q = pendingQueue
+            pendingQueue = null
+            return q
+        }
+
+        fun startForPlayList(
+            context: Context,
+            audios: ArrayList<Audio>,
+            position: Int
+        ) {
+            if (audios.isEmpty()) {
+                return
+            }
+            Logger.d(TAG, "startForPlayList, count: " + audios.size + ", position: " + position)
+            // FENRIR-CI: без окна — вся очередь уходит в плеер как есть, шафл по всей библиотеке.
+            pendingQueue = ArrayList(audios)
+            val intent = Intent(context, MusicPlaybackService::class.java)
+            intent.action = ACTION_PLAYLIST
+            intent.putExtra(Extra.POSITION, position)
+            context.startService(intent)
+        }
+    }
+}
