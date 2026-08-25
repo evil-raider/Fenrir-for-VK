@@ -68,6 +68,12 @@ class Audio : AbsModel {
         private set
     var downloadIndicator = 0
 
+    // FENRIR-CI: трёхсостояние недоступности. true выставляется ТОЛЬКО после того, как
+    // повторный резолв (audio.getById) подтвердил, что трек удалён/заблокирован (VK не
+    // вернул его в ответе). Пустой url сам по себе больше НЕ означает «удалён» — это
+    // могло быть просто «ссылка ещё не получена» (bulk audio.get) или сетевая ошибка.
+    var isConfirmedUnavailable = false
+
     constructor()
     internal constructor(parcel: Parcel) {
         id = parcel.readInt()
@@ -95,6 +101,7 @@ class Audio : AbsModel {
         isLocal = parcel.getBoolean()
         isLocalServer = parcel.getBoolean()
         downloadIndicator = parcel.readInt()
+        isConfirmedUnavailable = parcel.getBoolean()
     }
 
     /**
@@ -156,6 +163,7 @@ class Audio : AbsModel {
         parcel.putBoolean(isLocal)
         parcel.putBoolean(isLocalServer)
         parcel.writeInt(downloadIndicator)
+        parcel.putBoolean(isConfirmedUnavailable)
     }
 
     fun updateDownloadIndicator(): Audio {
@@ -196,9 +204,14 @@ class Audio : AbsModel {
     @get:DrawableRes
     val songIcon: Int
         get() {
-            if (url.isNullOrEmpty()) {
+            // FENRIR-CI: значок «удалён правообладателем» (audio_died) показываем ТОЛЬКО когда
+            // недоступность реально подтверждена повторным резолвом (audio.getById не вернул трек).
+            // Пустая ссылка сама по себе часто означает лишь «ссылка ещё не получена» — раньше
+            // все такие треки ошибочно помечались удалёнными.
+            if (isConfirmedUnavailable) {
                 return R.drawable.audio_died
-            } else if (url?.contains("audio_api_unavailable") == true) {
+            }
+            if (url?.contains("audio_api_unavailable") == true) {
                 return R.drawable.report
             }
             return R.drawable.song
