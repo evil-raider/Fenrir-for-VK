@@ -96,6 +96,8 @@ class AudiosPresenter(
                                 setLoadingNow(false)
                                 view?.notifyListChanged()
                                 mergeLocalUnified()
+                                // FENRIR-CI: кэш мог содержать треки без url — резолвим их.
+                                resolveMissingUrls(it)
                                 // FENRIR-CI: список пришёл из локального кэша — дозагружаем
                                 // остаток «Моей музыки» с того места, где кэш закончился.
                                 if (isMyAudio) {
@@ -169,6 +171,9 @@ class AudiosPresenter(
         // остаётся в списке отдельной "локальной" записью и задваивается, когда
         // его "настоящая" VK-версия подгружается на одной из следующих страниц.
         mergeLocalUnified()
+        // FENRIR-CI: догружаем реальные ссылки для треков этой страницы с пустым url —
+        // чтобы отличать "ссылка ещё не получена" от "реально удалён правообладателем".
+        resolveMissingUrls(data)
         setLoadingNow(false)
         if (needDeadHelper) {
             for (i in audios) {
@@ -183,6 +188,58 @@ class AudiosPresenter(
         // работали по всей библиотеке, а не по первой сотне треков.
         if (isMyAudio && !endOfContent && !iSSelectMode) {
             requestNext()
+        }
+    }
+
+    // FENRIR-CI: повторный резолв треков с пустой потоковой ссылкой.
+    // Массовый audio.get часто возвращает треки без url — раньше они показывались как
+    // «удалённые правообладателем» (значок audio_died), хотя на VK они на месте. Догружаем
+    // реальные ссылки через audio.getById (порциями). Ключевой сигнал: audio.getById НЕ
+    // возвращает реально удалённые/заблокированные треки — если запрошенного трека нет в
+    // ответе, помечаем его действительно недоступным (isConfirmedUnavailable).
+    private fun resolveMissingUrls(data: List<Audio>) {
+        if (iSSelectMode || searcher.isSearchMode) {
+            return
+        }
+        val need = data.filter {
+            it.url.isNullOrEmpty() && !it.isLocal && !it.isLocalServer && !it.isConfirmedUnavailable
+        }
+        if (need.isEmpty()) {
+            return
+        }
+        for (chunk in need.chunked(RESOLVE_CHUNK)) {
+            audioListDisposable.add(
+                audioInteractor.getById(accountId, chunk)
+                    .fromIOToMain({ resolved -> applyResolved(chunk, resolved) }) { }
+            )
+        }
+    }
+
+    private fun applyResolved(requested: List<Audio>, resolved: List<Audio>) {
+        val byKey = HashMap<String, Audio>(resolved.size)
+        for (r in resolved) {
+            byKey["${r.id}_${r.ownerId}"] = r
+        }
+        for (i in audios.indices) {
+            val a = audios[i]
+            if (!a.url.isNullOrEmpty()) {
+                continue
+            }
+            val wasRequested = requested.any { it.id == a.id && it.ownerId == a.ownerId }
+            if (!wasRequested) {
+                continue
+            }
+            val r = byKey["${a.id}_${a.ownerId}"]
+            if (r == null) {
+                // FENRIR-CI: audio.getById не вернул трек → он удалён/заблокирован → подтверждаем.
+                a.isConfirmedUnavailable = true
+                view?.notifyItemChanged(i)
+            } else if (!r.url.isNullOrEmpty()) {
+                a.setUrl(r.url)
+                a.isConfirmedUnavailable = false
+                view?.notifyItemChanged(i)
+            }
+            // FENRIR-CI: трек есть в ответе, но url пуст → оставляем как есть (без ложной пометки).
         }
     }
 
@@ -579,6 +636,9 @@ class AudiosPresenter(
         private const val SEARCH_COUNT = 1000
         private const val SEARCH_VIEW_COUNT = 20
         private const val WEB_SEARCH_DELAY = 1000
+
+        // FENRIR-CI: размер порции для повторного резолва ссылок (audio.getById).
+        private const val RESOLVE_CHUNK = 100
     }
 
     init {

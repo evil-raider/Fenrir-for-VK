@@ -66,6 +66,7 @@ import dev.ragnarok.fenrir.util.DownloadWorkUtils.GetLocalTrackLink
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
 import dev.ragnarok.fenrir.util.Logger
 import dev.ragnarok.fenrir.util.MissingTrackNotifier
+import dev.ragnarok.fenrir.util.PersistentShuffle
 import dev.ragnarok.fenrir.util.TransparentCacheWorker
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils
@@ -411,8 +412,10 @@ class MusicPlaybackService : MediaSessionService() {
             "handleCommandIntent: action = $action"
         )
         if (ACTION_PLAYLIST == action) {
-            val audios: ArrayList<Audio>? =
-                intent.getParcelableArrayListExtraCompat(Extra.AUDIOS)
+            // FENRIR-CI: полную очередь берём из in-process холдера (без лимита Binder ~1MB),
+            // из Intent — только позиция. Fallback на Extra.AUDIOS оставлен для совместимости.
+            val audios: List<Audio>? =
+                consumePendingQueue() ?: intent.getParcelableArrayListExtraCompat(Extra.AUDIOS)
             val position = intent.getIntExtra(Extra.POSITION, 0)
             if (audios.nonNullNoEmpty()) {
                 val repeatMode = PreferenceScreen.getPreferences(this)
@@ -470,6 +473,9 @@ class MusicPlaybackService : MediaSessionService() {
 
         private var errorsCount = 0
         private var hasErrorPlayback = false
+
+        // FENRIR-CI: полная текущая очередь для построения персистентного шафл-порядка.
+        private var currentQueue: List<Audio> = emptyList()
         val factory = Utils.getExoPlayerFactory(
             UserAgentTool.USER_AGENT_CURRENT_ACCOUNT,
             Includes.proxySettings.activeProxy
@@ -541,16 +547,35 @@ class MusicPlaybackService : MediaSessionService() {
             errorsCount = 0
             hasErrorPlayback = false
             isPreparing = true
+            currentQueue = ArrayList(audios) // FENRIR-CI: запоминаем полную очередь для шафла
             val sources = ArrayList<MediaSource>(audios.size)
             for (i in audios) {
                 sources.add(makeMediaSource(i))
             }
             exoplayer.setMediaSources(sources)
+            // FENRIR-CI: если шафл уже включён — переустанавливаем перестановку так, чтобы
+            // ещё не прозвучавшие в текущем проходе треки шли первыми (см. PersistentShuffle).
+            if (exoplayer.shuffleModeEnabled) {
+                applyPersistentShuffleOrder()
+            }
             exoplayer.prepare()
             exoplayer.setAudioAttributes(
                 AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                     .setUsage(C.USAGE_MEDIA).build(), true
             )
+        }
+
+        // FENRIR-CI: строит и применяет персистентную шафл-перестановку по всей текущей очереди.
+        private fun applyPersistentShuffleOrder() {
+            val ctx = mService.get() ?: return
+            val q = currentQueue
+            if (q.isEmpty() || exoplayer.mediaItemCount != q.size) {
+                return
+            }
+            val order = PersistentShuffle.buildOrder(ctx, q)
+            if (order.size == exoplayer.mediaItemCount) {
+                exoplayer.setShuffleOrder(MusicShuffleOrder(order, System.nanoTime()))
+            }
         }
 
         fun insertSourceAfterCurrent(audio: Audio) {
@@ -674,6 +699,10 @@ class MusicPlaybackService : MediaSessionService() {
                 if (exoplayer.shuffleModeEnabled == shuffleMode) {
                     return
                 }
+                if (shuffleMode) {
+                    // FENRIR-CI: включаем шафл по всей очереди с учётом уже прозвучавших треков.
+                    applyPersistentShuffleOrder()
+                }
                 exoplayer.shuffleModeEnabled = shuffleMode
             }
 
@@ -743,6 +772,15 @@ class MusicPlaybackService : MediaSessionService() {
                     ) {
                         mService.get()?.onceCloseMiniPlayer = false
                         mService.get()?.notifyChange(META_CHANGED)
+
+                        // FENRIR-CI: отмечаем реально прозвучавший трек для персистентного шафла,
+                        // чтобы охват был равномерным даже при частых прерываниях/перезапусках.
+                        if (exoplayer.shuffleModeEnabled) {
+                            val playedAudio = mediaItem?.localConfiguration?.tag as? Audio
+                            if (playedAudio != null) {
+                                mService.get()?.let { PersistentShuffle.markPlayed(it, playedAudio) }
+                            }
+                        }
 
                         val accountId = Settings.get().accounts().current
                         val audio = mediaItem?.localConfiguration?.tag as? Audio
@@ -1342,73 +1380,4 @@ class MusicPlaybackService : MediaSessionService() {
         const val META_CHANGED = "dev.ragnarok.fenrir.media.music.meta_changed"
         const val TRACK_CHANGED = "dev.ragnarok.fenrir.media.music.track_changed"
         const val PREPARED = "dev.ragnarok.fenrir.media.music.prepared"
-        const val SHUFFLE_NONE = 0
-        const val SHUFFLE = 1
-        const val REPEAT_MODE_CHANGED = "dev.ragnarok.fenrir.media.music.repeat_mode_changed"
-        const val SHUFFLE_MODE_CHANGED = "dev.ragnarok.fenrir.media.music.shuffle_mode_changed"
-        const val QUEUE_CHANGED = "dev.ragnarok.fenrir.media.music.queue_changed"
-        const val REFRESH = "dev.ragnarok.fenrir.media.music.refresh"
-
-        const val CUSTOM_COMMAND_CLOSE = "dev.ragnarok.fenrir.media.music.custom_command_close"
-        const val CUSTOM_COMMAND_DISABLE_REPEAT =
-            "dev.ragnarok.fenrir.media.music.custom_command_disable_repeat"
-        const val CUSTOM_COMMAND_REPEAT_MODE_ONCE =
-            "dev.ragnarok.fenrir.media.music.custom_command_repeat_mode_once"
-        const val CUSTOM_COMMAND_REPEAT_MODE_ALL =
-            "dev.ragnarok.fenrir.media.music.custom_command_repeat_mode_all"
-
-        const val PREFS_REPEAT =
-            "music_playback_repeat"
-        const val PREFS_SHUFFLE =
-            "music_playback_shuffle"
-
-        const val ACTION_PLAYLIST = "start_playlist"
-        const val MAX_QUEUE_SIZE = 200
-
-        fun startForPlayList(
-            context: Context,
-            audios: ArrayList<Audio>,
-            position: Int
-        ) {
-            if (audios.isEmpty()) {
-                return
-            }
-            Logger.d(TAG, "startForPlayList, count: " + audios.size + ", position: " + position)
-            val target: ArrayList<Audio>
-            var targetPosition: Int
-            if (audios.size <= MAX_QUEUE_SIZE) {
-                target = audios
-                targetPosition = position
-            } else {
-                target = ArrayList(MAX_QUEUE_SIZE)
-                val half = MAX_QUEUE_SIZE / 2
-                var startAt = position - half
-                if (startAt < 0) {
-                    startAt = 0
-                }
-                targetPosition = position - startAt
-                var i = startAt
-                while (target.size < MAX_QUEUE_SIZE) {
-                    if (i > audios.size - 1) {
-                        break
-                    }
-                    target.add(audios[i])
-                    i++
-                }
-                if (target.size < MAX_QUEUE_SIZE) {
-                    var it = startAt - 1
-                    while (target.size < MAX_QUEUE_SIZE) {
-                        target.add(0, audios[it])
-                        targetPosition++
-                        it--
-                    }
-                }
-            }
-            val intent = Intent(context, MusicPlaybackService::class.java)
-            intent.action = ACTION_PLAYLIST
-            intent.putParcelableArrayListExtra(Extra.AUDIOS, target)
-            intent.putExtra(Extra.POSITION, targetPosition)
-            context.startService(intent)
-        }
-    }
-}
+        const
