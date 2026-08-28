@@ -72,6 +72,34 @@ object UnifiedPlaylist {
     }
 
     /**
+     * FENRIR-CI: синхронно (без файлового скана и чтения ID3) возвращает локальные треки из
+     * последнего снимка сканера (LocalAudioFolderScanner.cachedSnapshot), которых ещё нет в
+     * переданном VK-списке. Нужен в момент старта воспроизведения «Моей музыки», чтобы
+     * офлайн-файлы гарантированно попали в очередь плеера и в набор шафла, даже если фоновый
+     * пересчёт mergeLocalUnified ещё не успел их дописать. Снимок наполняется из дискового
+     * кэша практически сразу при открытии вкладки, поэтому к моменту нажатия Play он, как
+     * правило, уже тёплый. Дедуп — по тому же ключу artist|title, что и в appendLocalOnly.
+     */
+    fun cachedLocalExtras(existing: List<Audio>): List<Audio> {
+        val snap = LocalAudioFolderScanner.cachedSnapshot()
+        if (snap.isEmpty()) {
+            return emptyList()
+        }
+        cacheAll(snap)
+        val known = HashSet<String>(existing.size)
+        for (a in existing) {
+            known.add(mergeKey(a))
+        }
+        val extras = ArrayList<Audio>()
+        for (l in snap) {
+            if (known.add(mergeKey(l))) {
+                extras.add(l)
+            }
+        }
+        return extras
+    }
+
+    /**
      * Прогревает снимок локальных треков (папки A/B/musicDir) без изменения текущего списка —
      * нужен, чтобы findLocalFallback() работал и в отдельных VK-плейлистах, где
      * appendLocalOnly() не вызывается (там локальные треки не подмешиваются в список, только

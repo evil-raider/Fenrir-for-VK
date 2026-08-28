@@ -106,7 +106,10 @@ internal class LocalMediaStorage(mRepositoryContext: AppStorages) : AbsStorage(m
             // для сканирования папок A/musicDir, не трогая саму настройку "audio_ext",
             // которая используется и в других местах приложения.
             val ext = Settings.get().main().audioExt + setOf("m4a", "wav", "aac")
-            emit(LocalAudioFolderScanner.scanFolders(accountId, folders, ext))
+            // FENRIR-CI: передаём каталог для персистентного кэша скана (ОЗУ+диск), чтобы
+            // офлайн-список не пересканировался с чтением ID3 при каждом запуске/странице.
+            // context.filesDir — внутреннее хранилище, переживает перезапуск приложения.
+            emit(LocalAudioFolderScanner.scanFolders(accountId, folders, ext, context.filesDir))
         }
     }
 
