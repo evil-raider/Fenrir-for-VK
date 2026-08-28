@@ -10,6 +10,8 @@ import dev.ragnarok.fenrir.R
 import dev.ragnarok.fenrir.domain.IAudioInteractor
 import dev.ragnarok.fenrir.domain.InteractorFactory
 import dev.ragnarok.fenrir.fragment.base.AccountDependencyPresenter
+import dev.ragnarok.fenrir.media.music.MusicPlaybackController
+import dev.ragnarok.fenrir.media.music.MusicPlaybackService.Companion.appendToPlayListIfCurrent
 import dev.ragnarok.fenrir.media.music.MusicPlaybackService.Companion.startForPlayList
 import dev.ragnarok.fenrir.model.Audio
 import dev.ragnarok.fenrir.model.AudioPlaylist
@@ -248,7 +250,7 @@ class AudiosPresenter(
         }
     }
 
-    // FENRIR-CI: единый плейлист — для «Моей музыки» подмешивает в конец списка локальные
+    // FENRIR-CI: единый плейлист — для ��Моей музыки» подмешивает в конец списка локальные
     // треки из папок (musicDir + «Папка с локальной музыкой»), которых нет среди VK-треков;
     // для остальных плейлистов только прогревает кэш соответствий (поиск локального аналога).
     //
@@ -299,12 +301,37 @@ class AudiosPresenter(
                     }
                     lastLocalExtrasSig = sig
                     view?.notifyListChanged()
+                    // FENRIR-CI: если «Моя музыка» уже играет — дозаписываем эти офлайн-треки
+                    // в живую очередь плеера, чтобы они попали и в шафл без перезапуска.
+                    maybeAppendOfflineToLivePlayback(extras)
                 }) { }
         )
     }
 
+    // FENRIR-CI: идентификатор очереди «Моей музыки» этого аккаунта (или null, если сейчас
+    // не тот контекст: select-mode/поиск/чужой владелец). По этой метке сервис
+    // отличает нашу очередь от чужого запущенного плейлиста.
+    private val myAudioQueueId: String?
+        get() = if (isMyAudio && !iSSelectMode && isNotSearch) "myaudio_$accountId" else null
+
+    // FENRIR-CI: живая дозапись догруженных офлайн-треков в уже играющую очередь «Моей
+    // музыки». Гейты: это «Моя музыка» (не select/не поиск), есть что добавлять и
+    // плеер реально играет/готовится (чтобы не поднимать сервис из фона впустую).
+    // Сама привязка к нужной очереди — по queueId внутри сервиса (no-op, если играет что-то
+    // другое). Порядок офлайна в списке = порядок дозаписи в конец очереди.
+    private fun maybeAppendOfflineToLivePlayback(extras: List<Audio>) {
+        val queueId = myAudioQueueId ?: return
+        if (extras.isEmpty()) {
+            return
+        }
+        if (!MusicPlaybackController.isPlaying && !MusicPlaybackController.isPreparing) {
+            return
+        }
+        appendToPlayListIfCurrent(Includes.provideApplicationContext(), extras, queueId)
+    }
+
     fun playAudio(context: Context, position: Int) {
-        // FENRIR-CI: перед стартом гарантированно подмешиваем офлайн-файлы из тёплого кэша
+        // FENRIR-CI: перед стартом гарантированно подмешиваем офлайн-ф��йлы из тёплого кэша
         // сканера (синхронно, без чтения диска/ID3), чтобы они попали в очередь плеера и в
         // набор шафла, даже если фоновый mergeLocalUnified ещё не успел дописать их в список.
         // Иначе при старте до загрузки офлайна очередь (а значит и шафл) состояла только из
@@ -321,7 +348,9 @@ class AudiosPresenter(
                 view?.notifyDataAdded(startSize, extras.size)
             }
         }
-        startForPlayList(context, audios, position)
+        // FENRIR-CI: помечаем очередь как «Моя музыка» этого аккаунта — по метке сервис
+        // разрешит живую дозапись офлайна именно в неё (см. maybeAppendOfflineToLivePlayback).
+        startForPlayList(context, audios, position, myAudioQueueId)
         if (!Settings.get().main().isShow_mini_player) getPlayerPlace(accountId).tryOpenWith(
             context
         )

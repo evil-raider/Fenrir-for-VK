@@ -93,6 +93,11 @@ class MusicPlaybackService : MediaSessionService() {
     private lateinit var customCommands: List<CommandButton>
     private var shutdownDelayedDisposable = CancelableJob()
 
+    // FENRIR-CI: метка активной очереди. "myaudio_<accountId>", когда играет «Моя музыка»
+    // этого аккаунта; null для любых других запусков (openFile/open/чужой плейлист).
+    // По ней живая дозапись офлайна понимает, что играет именно та очередь, и не лезет в чужую.
+    private var currentQueueId: String? = null
+
     private val MONO_SCHEDULER =
         CoroutineScope(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
 
@@ -411,12 +416,23 @@ class MusicPlaybackService : MediaSessionService() {
             TAG,
             "handleCommandIntent: action = $action"
         )
+        if (ACTION_APPEND_PLAYLIST == action) {
+            // FENRIR-CI: живая дозапись офлайн-треков в уже играющую очередь «Моей музыки».
+            val appendAudios = consumePendingAppend()
+            val appendQueueId = consumePendingAppendQueueId()
+            if (appendAudios.nonNullNoEmpty() && appendQueueId != null) {
+                appendToCurrentQueue(appendAudios, appendQueueId)
+            }
+            return
+        }
         if (ACTION_PLAYLIST == action) {
             // FENRIR-CI: полную очередь берём из in-process холдера (без лимита Binder ~1MB),
             // из Intent — только позиция. Fallback на Extra.AUDIOS оставлен для совместимости.
             val audios: List<Audio>? =
                 consumePendingQueue() ?: intent.getParcelableArrayListExtraCompat(Extra.AUDIOS)
             val position = intent.getIntExtra(Extra.POSITION, 0)
+            // FENRIR-CI: метка очереди, с которой стартует этот плейлист.
+            val queueId = consumePendingQueueId()
             if (audios.nonNullNoEmpty()) {
                 val repeatMode = PreferenceScreen.getPreferences(this)
                     .getInt(PREFS_REPEAT, Player.REPEAT_MODE_OFF)
@@ -429,6 +445,7 @@ class MusicPlaybackService : MediaSessionService() {
                     refreshMediaButtonCustomLayout()
                     changed = true
                 }
+                currentQueueId = queueId
                 musicPlayer.setSources(audios)
                 musicPlayer.playAt(position)
                 if (musicPlayer.shuffleMode != shuffleMode) {
@@ -580,6 +597,39 @@ class MusicPlaybackService : MediaSessionService() {
 
         fun insertSourceAfterCurrent(audio: Audio) {
             exoplayer.addMediaSource(exoplayer.currentMediaItemIndex + 1, makeMediaSource(audio))
+        }
+
+        // FENRIR-CI: дозапись новых треков в КОНЕЦ текущей очереди с дедупликацией
+        // (по url, а для треков без url — по "id_ownerId"). Обновляет currentQueue,
+        // добавляет медиаисточники в exoplayer и, если включён шафл, пересобирает
+        // персистентный шафл-порядок по всей расширенной очереди. Возвращает true,
+        // если что-то реально добавлено.
+        fun appendSources(newAudios: List<Audio>): Boolean {
+            if (newAudios.isEmpty() || currentQueue.isEmpty()) {
+                return false
+            }
+            val existing = HashSet<String>(currentQueue.size)
+            for (a in currentQueue) {
+                existing.add(if (!a.url.isNullOrEmpty()) a.url!! else "${a.id}_${a.ownerId}")
+            }
+            val toAdd = ArrayList<Audio>()
+            val newSources = ArrayList<MediaSource>()
+            for (a in newAudios) {
+                val key = if (!a.url.isNullOrEmpty()) a.url!! else "${a.id}_${a.ownerId}"
+                if (existing.add(key)) {
+                    toAdd.add(a)
+                    newSources.add(makeMediaSource(a))
+                }
+            }
+            if (toAdd.isEmpty()) {
+                return false
+            }
+            currentQueue = ArrayList(currentQueue).apply { addAll(toAdd) }
+            exoplayer.addMediaSources(newSources)
+            if (exoplayer.shuffleModeEnabled) {
+                applyPersistentShuffleOrder()
+            }
+            return true
         }
 
         fun play() {
@@ -927,6 +977,7 @@ class MusicPlaybackService : MediaSessionService() {
 
     internal fun openFile(audio: Audio) {
         synchronized(this) {
+            currentQueueId = null // FENRIR-CI: одиночный файл — это не «Моя музыка»
             musicPlayer.setSources(listOf(audio))
             notifyChange(QUEUE_CHANGED)
             musicPlayer.play()
@@ -935,9 +986,28 @@ class MusicPlaybackService : MediaSessionService() {
 
     internal fun open(list: List<Audio>, position: Int) {
         synchronized(this) {
+            currentQueueId = null // FENRIR-CI: произвольный список — не помечаем как «Моя музыка»
             musicPlayer.setSources(list)
             notifyChange(QUEUE_CHANGED)
             musicPlayer.playAt(position)
+        }
+    }
+
+    // FENRIR-CI: живая дозапись офлайн-«довесков» в уже играющую очередь «Моей музыки».
+    // Срабатывает, только если плеер готов/готовится И активная очередь помечена тем же
+    // queueId — иначе no-op, чтобы не влезть в чужой запущенный плейлист.
+    internal fun appendToCurrentQueue(audios: List<Audio>, queueId: String) {
+        synchronized(this) {
+            if (!musicPlayer.isPrepared && !musicPlayer.isPreparing) {
+                return
+            }
+            if (currentQueueId != queueId) {
+                return
+            }
+            val added = musicPlayer.appendSources(audios)
+            if (added) {
+                notifyChange(QUEUE_CHANGED)
+            }
         }
     }
 
@@ -1384,6 +1454,7 @@ class MusicPlaybackService : MediaSessionService() {
             "music_playback_shuffle"
 
         const val ACTION_PLAYLIST = "start_playlist"
+        const val ACTION_APPEND_PLAYLIST = "append_playlist"
         const val MAX_QUEUE_SIZE = 200
 
         // FENRIR-CI: полный список треков передаётся в процессе (см. pendingQueue), а НЕ через
@@ -1393,16 +1464,46 @@ class MusicPlaybackService : MediaSessionService() {
         @Volatile
         private var pendingQueue: List<Audio>? = null
 
+        // FENRIR-CI: метка очереди для стартующего плейлиста (см. currentQueueId).
+        @Volatile
+        private var pendingQueueId: String? = null
+
+        // FENRIR-CI: офлайн-«довески», ожидающие живой дозаписи в играющую очередь.
+        @Volatile
+        private var pendingAppend: List<Audio>? = null
+
+        @Volatile
+        private var pendingAppendQueueId: String? = null
+
         private fun consumePendingQueue(): List<Audio>? {
             val q = pendingQueue
             pendingQueue = null
             return q
         }
 
+        private fun consumePendingQueueId(): String? {
+            val q = pendingQueueId
+            pendingQueueId = null
+            return q
+        }
+
+        private fun consumePendingAppend(): List<Audio>? {
+            val q = pendingAppend
+            pendingAppend = null
+            return q
+        }
+
+        private fun consumePendingAppendQueueId(): String? {
+            val q = pendingAppendQueueId
+            pendingAppendQueueId = null
+            return q
+        }
+
         fun startForPlayList(
             context: Context,
             audios: ArrayList<Audio>,
-            position: Int
+            position: Int,
+            queueId: String? = null
         ) {
             if (audios.isEmpty()) {
                 return
@@ -1410,9 +1511,30 @@ class MusicPlaybackService : MediaSessionService() {
             Logger.d(TAG, "startForPlayList, count: " + audios.size + ", position: " + position)
             // FENRIR-CI: без окна — вся очередь уходит в плеер как есть, шафл по всей библиотеке.
             pendingQueue = ArrayList(audios)
+            pendingQueueId = queueId
             val intent = Intent(context, MusicPlaybackService::class.java)
             intent.action = ACTION_PLAYLIST
             intent.putExtra(Extra.POSITION, position)
+            context.startService(intent)
+        }
+
+        // FENRIR-CI: просит сервис дозаписать офлайн-треки в уже играющую очередь.
+        // Применится, только если активная очередь помечена тем же queueId (проверка
+        // в appendToCurrentQueue) — иначе no-op. Вызывать только когда плеер уже играет/готовится
+        // (см. AudiosPresenter.maybeAppendOfflineToLivePlayback), чтобы не поднимать сервис
+        // из фона ради пустой операции.
+        fun appendToPlayListIfCurrent(
+            context: Context,
+            audios: List<Audio>,
+            queueId: String
+        ) {
+            if (audios.isEmpty()) {
+                return
+            }
+            pendingAppend = ArrayList(audios)
+            pendingAppendQueueId = queueId
+            val intent = Intent(context, MusicPlaybackService::class.java)
+            intent.action = ACTION_APPEND_PLAYLIST
             context.startService(intent)
         }
     }
