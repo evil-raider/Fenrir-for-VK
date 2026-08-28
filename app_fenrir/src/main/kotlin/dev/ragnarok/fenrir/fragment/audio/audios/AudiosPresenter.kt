@@ -56,6 +56,11 @@ class AudiosPresenter(
     // FENRIR-CI: количество полученных от VK треков (без подмешанных локальных) —
     // корректный offset для запроса следующей страницы VK.
     private var receivedVkCount = 0
+
+    // FENRIR-CI: сигнатура последнего применённого набора локальных «довесков» — чтобы не
+    // пересобирать хвост и не дёргать notifyListChanged на каждой из ~N страниц VK, если
+    // набор офлайн-файлов не изменился (см. mergeLocalUnified).
+    private var lastLocalExtrasSig: String? = null
     private var doAudioLoadTabs = false
     private var needDeadHelper: Boolean
     private fun loadedPlaylist(t: AudioPlaylist) {
@@ -271,8 +276,18 @@ class AudiosPresenter(
         audioListDisposable.add(
             UnifiedPlaylist.appendLocalOnly(accountId, vkOnly)
                 .fromIOToMain({ extras ->
+                    // FENRIR-CI: сигнатура текущего набора офлайн-«довесков».
+                    val sig = extras.joinToString("\u0001") { it.url ?: "" }
                     val firstLocalIdx = audios.indexOfFirst {
                         it.url?.startsWith("file://") == true || it.url?.startsWith("content://") == true
+                    }
+                    // FENRIR-CI: набор офлайн-файлов не изменился и хвост уже на месте (либо
+                    // офлайна нет вовсе) — выходим, чтобы не мигать списком и не пересобирать
+                    // его на каждой странице VK. Условие самокорректирующееся: если хвост
+                    // пропал (например, после fireRefresh список очистился), а extras не пуст —
+                    // локальные треки будут добавлены заново.
+                    if (sig == lastLocalExtrasSig && (firstLocalIdx >= 0 || extras.isEmpty())) {
+                        return@fromIOToMain
                     }
                     if (firstLocalIdx >= 0) {
                         while (audios.size > firstLocalIdx) {
@@ -282,12 +297,30 @@ class AudiosPresenter(
                     if (extras.nonNullNoEmpty()) {
                         audios.addAll(extras)
                     }
+                    lastLocalExtrasSig = sig
                     view?.notifyListChanged()
                 }) { }
         )
     }
 
     fun playAudio(context: Context, position: Int) {
+        // FENRIR-CI: перед стартом гарантированно подмешиваем офлайн-файлы из тёплого кэша
+        // сканера (синхронно, без чтения диска/ID3), чтобы они попали в очередь плеера и в
+        // набор шафла, даже если фоновый mergeLocalUnified ещё не успел дописать их в список.
+        // Иначе при старте до загрузки офлайна очередь (а значит и шафл) состояла только из
+        // VK-треков — офлайн в случайное воспроизведение почти не попадал. Добавляем в конец,
+        // поэтому переданный position (индекс в текущем списке) остаётся корректным.
+        if (isMyAudio && !iSSelectMode && isNotSearch) {
+            val extras = UnifiedPlaylist.cachedLocalExtras(audios)
+            if (extras.nonNullNoEmpty()) {
+                val startSize = audios.size
+                audios.addAll(extras)
+                lastLocalExtrasSig = audios.filter {
+                    it.url?.startsWith("file://") == true || it.url?.startsWith("content://") == true
+                }.joinToString("\u0001") { it.url ?: "" }
+                view?.notifyDataAdded(startSize, extras.size)
+            }
+        }
         startForPlayList(context, audios, position)
         if (!Settings.get().main().isShow_mini_player) getPlayerPlace(accountId).tryOpenWith(
             context
