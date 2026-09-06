@@ -12,40 +12,53 @@ import kotlin.random.Random
  * Зачем: обычный Fisher–Yates в MusicShuffleOrder даёт равномерную перестановку в пределах
  * ОДНОЙ сессии, но ExoPlayer пересоздаёт перестановку при каждом новом построении очереди
  * (новый setMediaSources / перезапуск сервиса). Если пользователь часто прерывает
- * прослушивание, очередь каждый раз тасуется с нуля — и охват «съезжает» к началу
- * перестановки: часть треков звучит многократно, часть не звучит вообще.
+ * прослушивание, охват «съезжает» к началу перестановки: часть треков звучит многократно,
+ * часть не звучит вообще. Поэтому помним, что уже прозвучало в текущем «проходе».
  *
- * Решение: помним множество уже прозвучавших треков в рамках текущего «прохода» ОТДЕЛЬНО
- * для каждого источника (sourceId): «Моя музыка», конкретный VK-плейлист/альбом, папка «На
- * устройстве» и т.д. При построении шафл-порядка ещё НЕ прозвучавшие в этом проходе треки
- * ставим в начало (в случайном порядке), уже прозвучавшие — в хвост. Когда пройден весь
- * ТЕКУЩИЙ состав источника — цикл сбрасывается и начинается новый проход.
+ * Изоляция по источнику: «Моя музыка», каждый VK-плейлист/альбом и папка «На устройстве»
+ * копят свой независимый проход и не влияют друг на друга. sourceId == null → ЭФЕМЕРНАЯ
+ * очередь (поиск, артист, рекомендации, каталог, локальный сервер): обычный равномерный
+ * шафл, состояние не читаем и не пишем.
  *
- * Важные отличия от прежней версии:
- *  - Нет единого глобального состояния и нет «signature». Раньше любое изменение состава
- *    (ночная докачка, догрузка следующей сотни «Моей музыки», пропавший трек) меняло
- *    signature и обнуляло весь прогресс; теперь состав можно менять — проход считается по
- *    актуальному списку, прогресс не сбрасывается «на ровном месте».
- *  - Разные источники не влияют друг на друга: послушать отдельный плейлист больше не
- *    портит прогресс «Моей музыки».
- *  - sourceId == null → ЭФЕМЕРНАЯ очередь (поиск, артист, рекомендации, каталог, локальный
- *    сервер, одиночные ссылки): обычный равномерный шафл, состояние не читаем и не пишем.
+ * Устойчивость к неполному списку (важно): списки грузятся инкрементально (догрузка сотен
+ * «Моей музыки», асинхронный офлайн). Поэтому:
+ *  - Прогресс НЕ обнуляется при изменении состава.
+ *  - Мёртвые ключи (треков уже нет в источнике) вычищаем ТОЛЬКО когда список точно полный
+ *    (его размер не меньше максимума, что мы видели для источника) — тогда отсутствие ключа
+ *    означает реальное удаление, а не «ещё не догружено».
+ *  - Новый проход начинаем ТОЛЬКО на полном списке — иначе полностью прослушанный ПРЕФИКС
+ *    ещё грузящегося списка ложно сбрасывал бы прогресс.
  *
- * Состояние храним в SharedPreferences как CSV-строки (без StringSet — надёжнее на любой
- * реализации SharedPreferences), ключи — с суффиксом sourceId. Чтобы префы не пухли от
- * множества разовых плейлистов, ведём MRU-список источников и вычищаем самые старые сверх
- * лимита (MAX_SOURCES).
+ * Расход ресурсов: состояние держим в памяти (авторитетно во время жизни процесса) и пишем
+ * в SharedPreferences через apply() — колбэк плеера markPlayed НЕ блокирует диск (в отличие
+ * от прежнего синхронного commit на каждый трек) и не перечитывает CSV. Число источников
+ * ограничено MRU-списком (MAX_SOURCES); самые старые вычищаются вместе со своими ключами.
+ * Единственный критерий завершения прохода — состав (в buildOrder); отдельного счётчика
+ * (total) больше нет.
  */
 object PersistentShuffle {
     private const val PREF_PLAYED_PREFIX = "ci_shuffle_played_"
-    private const val PREF_TOTAL_PREFIX = "ci_shuffle_total_"
+    private const val PREF_MAX_PREFIX = "ci_shuffle_max_"
 
     // MRU-список известных источников (свежий — первым) и его лимит.
     private const val PREF_SOURCES = "ci_shuffle_sources"
     private const val SOURCES_SEP = "\u0001"
     private const val MAX_SOURCES = 32
 
-    private fun keyOf(a: Audio): String = "${a.id}_${a.ownerId}"
+    // Один замок на всё состояние: buildOrder (поток построения очереди) и markPlayed
+    // (onMediaItemTransition) не должны гонять read-modify-write параллельно.
+    private val lock = Any()
+
+    // Состояние в памяти — авторитетно, пока жив процесс. В prefs льём через apply().
+    private val playedMem = HashMap<String, MutableSet<String>>()
+    private val maxMem = HashMap<String, Int>()
+    private val sources = ArrayList<String>()
+    private var sourcesLoaded = false
+
+    // Ключ трека. Для локальных файлов id = url.hashCode() (32-бит, возможны коллизии),
+    // поэтому для них ключом берём стабильный file-url; для VK — стабильную пару id_ownerId.
+    private fun keyOf(a: Audio): String =
+        if (a.isLocal && !a.url.isNullOrEmpty()) "u:${a.url}" else "${a.id}_${a.ownerId}"
 
     private fun parseSet(s: String?): MutableSet<String> {
         if (s.isNullOrEmpty()) {
@@ -63,32 +76,63 @@ object PersistentShuffle {
         return ArrayList(s.split(SOURCES_SEP).filter { it.isNotEmpty() })
     }
 
-    private fun loadPlayed(context: Context, sourceId: String): MutableSet<String> {
-        return parseSet(
-            PreferenceScreen.getPreferences(context).getString(PREF_PLAYED_PREFIX + sourceId, null)
+    private fun ensureSourcesLoaded(context: Context) {
+        if (sourcesLoaded) {
+            return
+        }
+        sourcesLoaded = true
+        sources.clear()
+        sources.addAll(
+            parseSources(PreferenceScreen.getPreferences(context).getString(PREF_SOURCES, null))
         )
     }
 
-    // Сохраняет прогресс источника и подтягивает его в начало MRU-списка (с вычисткой старых).
-    private fun save(context: Context, sourceId: String, played: Set<String>, total: Int?) {
-        val prefs = PreferenceScreen.getPreferences(context)
-        val sources = parseSources(prefs.getString(PREF_SOURCES, null))
+    // Ленивая гидратация набора прослушанного по источнику (грузим только реально нужные).
+    private fun playedFor(context: Context, sourceId: String): MutableSet<String> =
+        playedMem.getOrPut(sourceId) {
+            parseSet(
+                PreferenceScreen.getPreferences(context)
+                    .getString(PREF_PLAYED_PREFIX + sourceId, null)
+            )
+        }
+
+    private fun maxFor(context: Context, sourceId: String): Int =
+        maxMem.getOrPut(sourceId) {
+            PreferenceScreen.getPreferences(context).getInt(PREF_MAX_PREFIX + sourceId, 0)
+        }
+
+    private fun touchSource(sourceId: String) {
+        if (sources.firstOrNull() == sourceId) {
+            return
+        }
         sources.remove(sourceId)
         sources.add(0, sourceId)
+    }
+
+    // Асинхронно (apply) сохраняет состояние источника и MRU-список, вычищая старьё сверх
+    // лимита вместе с его ключами. Значения берём из памяти (она авторитетна).
+    private fun persist(context: Context, sourceId: String) {
+        val played = playedFor(context, sourceId)
+        val mx = maxFor(context, sourceId)
         val evicted = ArrayList<String>()
         while (sources.size > MAX_SOURCES) {
-            evicted.add(sources.removeAt(sources.size - 1))
-        }
-        prefs.edit(true) {
-            putString(PREF_PLAYED_PREFIX + sourceId, joinSet(played))
-            if (total != null) {
-                putInt(PREF_TOTAL_PREFIX + sourceId, total)
+            val old = sources.removeAt(sources.size - 1)
+            if (old != sourceId) {
+                evicted.add(old)
             }
+        }
+        PreferenceScreen.getPreferences(context).edit {
+            putString(PREF_PLAYED_PREFIX + sourceId, joinSet(played))
+            putInt(PREF_MAX_PREFIX + sourceId, mx)
             putString(PREF_SOURCES, sources.joinToString(SOURCES_SEP))
             for (e in evicted) {
                 remove(PREF_PLAYED_PREFIX + e)
-                remove(PREF_TOTAL_PREFIX + e)
+                remove(PREF_MAX_PREFIX + e)
             }
+        }
+        for (e in evicted) {
+            playedMem.remove(e)
+            maxMem.remove(e)
         }
     }
 
@@ -109,10 +153,10 @@ object PersistentShuffle {
      * Строит перестановку индексов [0, audios.size).
      *
      * sourceId == null → эфемерная очередь: обычный равномерный шафл, состояние не трогаем.
-     * sourceId != null → персистентный проход именно этого источника: сначала (в случайном
-     * порядке) ещё не прозвучавшие в текущем проходе треки, затем — уже прозвучавшие. Если
-     * прозвучал весь ТЕКУЩИЙ состав — сброс и новый проход. Изменение состава само по себе
-     * проход НЕ сбрасывает.
+     * sourceId != null → персистентный проход источника: сначала (в случайном порядке) ещё
+     * не прозвучавшие в текущем проходе треки, затем — уже прозвучавшие. Прун мёртвых ключей
+     * и старт нового прохода происходят ТОЛЬКО когда список полный (n >= maxSeen), чтобы
+     * неполная догрузка не сбрасывала прогресс.
      */
     fun buildOrder(context: Context, sourceId: String?, audios: List<Audio>): IntArray {
         val n = audios.size
@@ -122,66 +166,87 @@ object PersistentShuffle {
         if (sourceId.isNullOrEmpty()) {
             return plainOrder(n)
         }
-        val stored = loadPlayed(context, sourceId)
+        synchronized(lock) {
+            ensureSourcesLoaded(context)
+            val played = playedFor(context, sourceId)
+            val prevMax = maxFor(context, sourceId)
+            val curMax = if (n > prevMax) n else prevMax
+            // Список считаем полным, если он не меньше максимума, что мы видели для источника.
+            val full = n >= curMax
 
-        // Прогресс считаем по актуальному составу: в множестве «прозвучавших» оставляем только
-        // те ключи, что реально есть в текущем списке (иначе оно копило бы удалённые треки и
-        // «проход» никогда бы не завершался).
-        val played = HashSet<String>()
-        val unplayedIdx = ArrayList<Int>(n)
-        val playedIdx = ArrayList<Int>()
-        for (i in 0 until n) {
-            val k = keyOf(audios[i])
-            if (stored.contains(k)) {
-                played.add(k)
-                playedIdx.add(i)
-            } else {
-                unplayedIdx.add(i)
-            }
-        }
-        if (unplayedIdx.isEmpty()) {
-            // Проход завершён — начинаем новый по всему текущему составу.
-            played.clear()
-            playedIdx.clear()
+            val unplayedIdx = ArrayList<Int>(n)
+            val playedIdx = ArrayList<Int>()
+            val presentKeys = if (full) HashSet<String>(n) else null
             for (i in 0 until n) {
-                unplayedIdx.add(i)
+                val k = keyOf(audios[i])
+                presentKeys?.add(k)
+                if (played.contains(k)) {
+                    playedIdx.add(i)
+                } else {
+                    unplayedIdx.add(i)
+                }
             }
-        }
-        save(context, sourceId, played, n)
 
-        val random = Random(System.nanoTime())
-        shuffleInPlace(unplayedIdx, random)
-        shuffleInPlace(playedIdx, random)
+            var changed = false
+            // Безопасный прун: только на полном списке — отсутствующие ключи это реально
+            // удалённые треки, а не «ещё не догруженные».
+            if (presentKeys != null && played.retainAll(presentKeys)) {
+                changed = true
+            }
+            // Новый проход — только на полном списке (иначе прослушанный префикс ложно
+            // обнулял бы прогресс ещё грузящегося источника).
+            if (full && unplayedIdx.isEmpty()) {
+                if (played.isNotEmpty()) {
+                    played.clear()
+                    changed = true
+                }
+                playedIdx.clear()
+                for (i in 0 until n) {
+                    unplayedIdx.add(i)
+                }
+            }
+            if (curMax != prevMax) {
+                maxMem[sourceId] = curMax
+                changed = true
+            }
+            touchSource(sourceId)
+            // Персистим только при содержательном изменении; порядок MRU долетит со следующим
+            // значимым persist — это лишь мягкая подсказка для вычистки.
+            if (changed) {
+                persist(context, sourceId)
+            }
 
-        val order = IntArray(n)
-        var p = 0
-        for (i in unplayedIdx) {
-            order[p++] = i
+            val random = Random(System.nanoTime())
+            shuffleInPlace(unplayedIdx, random)
+            shuffleInPlace(playedIdx, random)
+
+            val order = IntArray(n)
+            var p = 0
+            for (i in unplayedIdx) {
+                order[p++] = i
+            }
+            for (i in playedIdx) {
+                order[p++] = i
+            }
+            return order
         }
-        for (i in playedIdx) {
-            order[p++] = i
-        }
-        return order
     }
 
     /**
      * Отмечает трек как прозвучавший в текущем проходе источника sourceId. Для эфемерных
-     * очередей (sourceId == null) — no-op. Когда прозвучали все треки прохода (по последнему
-     * известному размеру состава), множество очищается — следующий buildOrder() начнёт новый
-     * цикл.
+     * очередей (sourceId == null) — no-op. Завершение прохода здесь НЕ решается (единый
+     * критерий — состав в buildOrder), тут только копим ключи.
      */
     fun markPlayed(context: Context, sourceId: String?, audio: Audio?) {
         if (sourceId.isNullOrEmpty() || audio == null) {
             return
         }
-        val prefs = PreferenceScreen.getPreferences(context)
-        val total = prefs.getInt(PREF_TOTAL_PREFIX + sourceId, 0)
-        val played = parseSet(prefs.getString(PREF_PLAYED_PREFIX + sourceId, null))
-        if (played.add(keyOf(audio))) {
-            if (total in 1..played.size) {
-                save(context, sourceId, emptySet(), total)
-            } else {
-                save(context, sourceId, played, null)
+        synchronized(lock) {
+            ensureSourcesLoaded(context)
+            val played = playedFor(context, sourceId)
+            if (played.add(keyOf(audio))) {
+                touchSource(sourceId)
+                persist(context, sourceId)
             }
         }
     }

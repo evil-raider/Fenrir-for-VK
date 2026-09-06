@@ -308,13 +308,6 @@ class AudiosPresenter(
         )
     }
 
-    // FENRIR-CI: идентификатор очереди «Моей музыки» этого аккаунта (или null, если сейчас
-    // не тот контекст: select-mode/поиск/чужой владелец). По этой метке сервис
-    // отличает нашу очередь от чужого запущенного плейлиста. Используется только для живой
-    // дозаписи офлайна в maybeAppendOfflineToLivePlayback (только «Моя музыка»).
-    private val myAudioQueueId: String?
-        get() = if (isMyAudio && !iSSelectMode && isNotSearch) "myaudio_$accountId" else null
-
     // FENRIR-CI: идентификатор ИСТОЧНИКА для персистентного шафла (см. PersistentShuffle).
     // «Моя музыка» и каждый отдельный VK-плейлист/альбом копят свой независимый проход
     // и не влияют друг на друга; select-mode и поиск эфемерны (null → обычный равномерный шафл).
@@ -325,6 +318,12 @@ class AudiosPresenter(
             playlistId != null -> "playlist_${ownerId}_$playlistId"
             else -> null
         }
+
+    // FENRIR-CI: то же значение, что playbackQueueId для «Моей музыки» (единый источник
+    // правды) — служит только гейтом живой дозаписи офлайна (только «Моя музыка»), по нему
+    // сервис отличает нашу очередь от чужого запущенного плейлиста.
+    private val myAudioQueueId: String?
+        get() = if (isMyAudio) playbackQueueId else null
 
     // FENRIR-CI: живая дозапись догруженных офлайн-треков в уже играющую очередь «Моей
     // музыки». Гейты: это «Моя музыка» (не select/не поиск), есть что добавлять и
