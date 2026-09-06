@@ -250,7 +250,7 @@ class AudiosPresenter(
         }
     }
 
-    // FENRIR-CI: единый плейлист — для ��Моей музыки» подмешивает в конец списка локальные
+    // FENRIR-CI: единый плейлист — для «Моей музыки» подмешивает в конец списка локальные
     // треки из папок (musicDir + «Папка с локальной музыкой»), которых нет среди VK-треков;
     // для остальных плейлистов только прогревает кэш соответствий (поиск локального аналога).
     //
@@ -310,9 +310,21 @@ class AudiosPresenter(
 
     // FENRIR-CI: идентификатор очереди «Моей музыки» этого аккаунта (или null, если сейчас
     // не тот контекст: select-mode/поиск/чужой владелец). По этой метке сервис
-    // отличает нашу очередь от чужого запущенного плейлиста.
+    // отличает нашу очередь от чужого запущенного плейлиста. Используется только для живой
+    // дозаписи офлайна в maybeAppendOfflineToLivePlayback (только «Моя музыка»).
     private val myAudioQueueId: String?
         get() = if (isMyAudio && !iSSelectMode && isNotSearch) "myaudio_$accountId" else null
+
+    // FENRIR-CI: идентификатор ИСТОЧНИКА для персистентного шафла (см. PersistentShuffle).
+    // «Моя музыка» и каждый отдельный VK-плейлист/альбом копят свой независимый проход
+    // и не влияют друг на друга; select-mode и поиск эфемерны (null → обычный равномерный шафл).
+    private val playbackQueueId: String?
+        get() = when {
+            iSSelectMode || searcher.isSearchMode -> null
+            isMyAudio -> "myaudio_$accountId"
+            playlistId != null -> "playlist_${ownerId}_$playlistId"
+            else -> null
+        }
 
     // FENRIR-CI: живая дозапись догруженных офлайн-треков в уже играющую очередь «Моей
     // музыки». Гейты: это «Моя музыка» (не select/не поиск), есть что добавлять и
@@ -331,7 +343,7 @@ class AudiosPresenter(
     }
 
     fun playAudio(context: Context, position: Int) {
-        // FENRIR-CI: перед стартом гарантированно подмешиваем офлайн-ф��йлы из тёплого кэша
+        // FENRIR-CI: перед стартом гарантированно подмешиваем офлайн-файлы из тёплого кэша
         // сканера (синхронно, без чтения диска/ID3), чтобы они попали в очередь плеера и в
         // набор шафла, даже если фоновый mergeLocalUnified ещё не успел дописать их в список.
         // Иначе при старте до загрузки офлайна очередь (а значит и шафл) состояла только из
@@ -348,9 +360,10 @@ class AudiosPresenter(
                 view?.notifyDataAdded(startSize, extras.size)
             }
         }
-        // FENRIR-CI: помечаем очередь как «Моя музыка» этого аккаунта — по метке сервис
-        // разрешит живую дозапись офлайна именно в неё (см. maybeAppendOfflineToLivePlayback).
-        startForPlayList(context, audios, position, myAudioQueueId)
+        // FENRIR-CI: помечаем источник очереди (Моя музыка / конкретный плейлист / null для
+        // поиска и select) — по нему персистентный шафл ведёт независимый проход, а живую
+        // дозапись офлайна сервис разрешает только в «Мою музыку» (maybeAppendOfflineToLivePlayback).
+        startForPlayList(context, audios, position, playbackQueueId)
         if (!Settings.get().main().isShow_mini_player) getPlayerPlace(accountId).tryOpenWith(
             context
         )
