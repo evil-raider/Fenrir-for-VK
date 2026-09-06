@@ -96,7 +96,7 @@ class MusicPlaybackService : MediaSessionService() {
     // FENRIR-CI: метка активной очереди. "myaudio_<accountId>", когда играет «Моя музыка»
     // этого аккаунта; null для любых других запусков (openFile/open/чужой плейлист).
     // По ней живая дозапись офлайна понимает, что играет именно та очередь, и не лезет в чужую.
-    private var currentQueueId: String? = null
+    internal var currentQueueId: String? = null
 
     private val MONO_SCHEDULER =
         CoroutineScope(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
@@ -589,7 +589,7 @@ class MusicPlaybackService : MediaSessionService() {
             if (q.isEmpty() || exoplayer.mediaItemCount != q.size) {
                 return
             }
-            val order = PersistentShuffle.buildOrder(ctx, q)
+            val order = PersistentShuffle.buildOrder(ctx, ctx.currentQueueId, q)
             if (order.size == exoplayer.mediaItemCount) {
                 exoplayer.setShuffleOrder(MusicShuffleOrder(order, System.nanoTime()))
             }
@@ -828,7 +828,7 @@ class MusicPlaybackService : MediaSessionService() {
                         if (exoplayer.shuffleModeEnabled) {
                             val playedAudio = mediaItem?.localConfiguration?.tag as? Audio
                             if (playedAudio != null) {
-                                mService.get()?.let { PersistentShuffle.markPlayed(it, playedAudio) }
+                                mService.get()?.let { PersistentShuffle.markPlayed(it, it.currentQueueId, playedAudio) }
                             }
                         }
 
