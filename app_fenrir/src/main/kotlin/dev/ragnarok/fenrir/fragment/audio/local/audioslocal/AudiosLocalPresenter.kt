@@ -202,7 +202,8 @@ class AudiosLocalPresenter(accountId: Long, savedInstanceState: Bundle?) :
     }
 
     fun playAudio(context: Context, position: Int) {
-        startForPlayList(context, audios, position)
+        // FENRIR-CI: «На устройстве» — свой персистентный проход шафла на источник (папка/альбом).
+        startForPlayList(context, audios, position, "localaudio_${accountId}_${bucket_id}")
         if (!Settings.get().main().isShow_mini_player) getPlayerPlace(accountId).tryOpenWith(
             context
         )

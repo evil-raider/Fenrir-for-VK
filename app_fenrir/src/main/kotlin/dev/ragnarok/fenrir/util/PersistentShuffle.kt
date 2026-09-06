@@ -7,7 +7,7 @@ import dev.ragnarok.fenrir.model.Audio
 import kotlin.random.Random
 
 /**
- * FENRIR-CI: персистентный «честный» шафл по ВСЕЙ библиотеке.
+ * FENRIR-CI: персистентный «честный» шафл, ИЗОЛИРОВАННЫЙ по источнику очереди (sourceId).
  *
  * Зачем: обычный Fisher–Yates в MusicShuffleOrder даёт равномерную перестановку в пределах
  * ОДНОЙ сессии, но ExoPlayer пересоздаёт перестановку при каждом новом построении очереди
@@ -15,32 +15,37 @@ import kotlin.random.Random
  * прослушивание, очередь каждый раз тасуется с нуля — и охват «съезжает» к началу
  * перестановки: часть треков звучит многократно, часть не звучит вообще.
  *
- * Решение: помним множество уже прозвучавших треков в рамках текущего «прохода» по
- * библиотеке (signature = размер набора + хэш отсортированных ключей id_ownerId). При
- * построении шафл-порядка ещё НЕ прозвучавшие треки ставим в начало (в случайном порядке),
- * уже прозвучавшие — в хвост. Когда пройдены все — цикл сбрасывается и начинается новый
- * проход. Так «абсолютно случайное» воспроизведение примерно равномерно охватывает все
- * треки независимо от того, как часто прерывается прослушивание.
+ * Решение: помним множество уже прозвучавших треков в рамках текущего «прохода» ОТДЕЛЬНО
+ * для каждого источника (sourceId): «Моя музыка», конкретный VK-плейлист/альбом, папка «На
+ * устройстве» и т.д. При построении шафл-порядка ещё НЕ прозвучавшие в этом проходе треки
+ * ставим в начало (в случайном порядке), уже прозвучавшие — в хвост. Когда пройден весь
+ * ТЕКУЩИЙ состав источника — цикл сбрасывается и начинается новый проход.
  *
- * Состояние храним в SharedPreferences как CSV-строку (без StringSet — надёжнее на любой
- * реализации SharedPreferences).
+ * Важные отличия от прежней версии:
+ *  - Нет единого глобального состояния и нет «signature». Раньше любое изменение состава
+ *    (ночная докачка, догрузка следующей сотни «Моей музыки», пропавший трек) меняло
+ *    signature и обнуляло весь прогресс; теперь состав можно менять — проход считается по
+ *    актуальному списку, прогресс не сбрасывается «на ровном месте».
+ *  - Разные источники не влияют друг на друга: послушать отдельный плейлист больше не
+ *    портит прогресс «Моей музыки».
+ *  - sourceId == null → ЭФЕМЕРНАЯ очередь (поиск, артист, рекомендации, каталог, локальный
+ *    сервер, одиночные ссылки): обычный равномерный шафл, состояние не читаем и не пишем.
+ *
+ * Состояние храним в SharedPreferences как CSV-строки (без StringSet — надёжнее на любой
+ * реализации SharedPreferences), ключи — с суффиксом sourceId. Чтобы префы не пухли от
+ * множества разовых плейлистов, ведём MRU-список источников и вычищаем самые старые сверх
+ * лимита (MAX_SOURCES).
  */
 object PersistentShuffle {
-    private const val PREF_SIGNATURE = "ci_shuffle_signature"
-    private const val PREF_PLAYED = "ci_shuffle_played"
-    private const val PREF_TOTAL = "ci_shuffle_total"
+    private const val PREF_PLAYED_PREFIX = "ci_shuffle_played_"
+    private const val PREF_TOTAL_PREFIX = "ci_shuffle_total_"
+
+    // MRU-список известных источников (свежий — первым) и его лимит.
+    private const val PREF_SOURCES = "ci_shuffle_sources"
+    private const val SOURCES_SEP = "\u0001"
+    private const val MAX_SOURCES = 32
 
     private fun keyOf(a: Audio): String = "${a.id}_${a.ownerId}"
-
-    // Стабильная подпись набора треков: размер + хэш отсортированных ключей.
-    fun signatureOf(audios: List<Audio>): String {
-        val keys = ArrayList<String>(audios.size)
-        for (a in audios) {
-            keys.add(keyOf(a))
-        }
-        keys.sort()
-        return audios.size.toString() + ":" + keys.joinToString(",").hashCode().toString()
-    }
 
     private fun parseSet(s: String?): MutableSet<String> {
         if (s.isNullOrEmpty()) {
@@ -51,54 +56,98 @@ object PersistentShuffle {
 
     private fun joinSet(set: Set<String>): String = set.joinToString(",")
 
-    private fun loadPlayed(context: Context, signature: String): MutableSet<String> {
-        val prefs = PreferenceScreen.getPreferences(context)
-        val savedSig = prefs.getString(PREF_SIGNATURE, null)
-        if (savedSig != signature) {
-            return HashSet()
+    private fun parseSources(s: String?): MutableList<String> {
+        if (s.isNullOrEmpty()) {
+            return ArrayList()
         }
-        return parseSet(prefs.getString(PREF_PLAYED, null))
+        return ArrayList(s.split(SOURCES_SEP).filter { it.isNotEmpty() })
     }
 
-    private fun save(context: Context, signature: String, played: Set<String>, total: Int) {
-        PreferenceScreen.getPreferences(context).edit(true) {
-            putString(PREF_SIGNATURE, signature)
-            putString(PREF_PLAYED, joinSet(played))
-            putInt(PREF_TOTAL, total)
+    private fun loadPlayed(context: Context, sourceId: String): MutableSet<String> {
+        return parseSet(
+            PreferenceScreen.getPreferences(context).getString(PREF_PLAYED_PREFIX + sourceId, null)
+        )
+    }
+
+    // Сохраняет прогресс источника и подтягивает его в начало MRU-списка (с вычисткой старых).
+    private fun save(context: Context, sourceId: String, played: Set<String>, total: Int?) {
+        val prefs = PreferenceScreen.getPreferences(context)
+        val sources = parseSources(prefs.getString(PREF_SOURCES, null))
+        sources.remove(sourceId)
+        sources.add(0, sourceId)
+        val evicted = ArrayList<String>()
+        while (sources.size > MAX_SOURCES) {
+            evicted.add(sources.removeAt(sources.size - 1))
         }
+        prefs.edit(true) {
+            putString(PREF_PLAYED_PREFIX + sourceId, joinSet(played))
+            if (total != null) {
+                putInt(PREF_TOTAL_PREFIX + sourceId, total)
+            }
+            putString(PREF_SOURCES, sources.joinToString(SOURCES_SEP))
+            for (e in evicted) {
+                remove(PREF_PLAYED_PREFIX + e)
+                remove(PREF_TOTAL_PREFIX + e)
+            }
+        }
+    }
+
+    private fun plainOrder(n: Int): IntArray {
+        val idx = ArrayList<Int>(n)
+        for (i in 0 until n) {
+            idx.add(i)
+        }
+        shuffleInPlace(idx, Random(System.nanoTime()))
+        val order = IntArray(n)
+        for (i in 0 until n) {
+            order[i] = idx[i]
+        }
+        return order
     }
 
     /**
-     * Строит перестановку индексов [0, audios.size): сначала (в случайном порядке) индексы
-     * треков, которых нет в множестве уже прозвучавших для текущей signature, затем —
-     * уже прозвучавшие. Если прозвучали все, сбрасывает цикл и тасует всё заново.
+     * Строит перестановку индексов [0, audios.size).
+     *
+     * sourceId == null → эфемерная очередь: обычный равномерный шафл, состояние не трогаем.
+     * sourceId != null → персистентный проход именно этого источника: сначала (в случайном
+     * порядке) ещё не прозвучавшие в текущем проходе треки, затем — уже прозвучавшие. Если
+     * прозвучал весь ТЕКУЩИЙ состав — сброс и новый проход. Изменение состава само по себе
+     * проход НЕ сбрасывает.
      */
-    fun buildOrder(context: Context, audios: List<Audio>): IntArray {
+    fun buildOrder(context: Context, sourceId: String?, audios: List<Audio>): IntArray {
         val n = audios.size
         if (n <= 0) {
             return IntArray(0)
         }
-        val signature = signatureOf(audios)
-        var played = loadPlayed(context, signature)
+        if (sourceId.isNullOrEmpty()) {
+            return plainOrder(n)
+        }
+        val stored = loadPlayed(context, sourceId)
 
+        // Прогресс считаем по актуальному составу: в множестве «прозвучавших» оставляем только
+        // те ключи, что реально есть в текущем списке (иначе оно копило бы удалённые треки и
+        // «проход» никогда бы не завершался).
+        val played = HashSet<String>()
         val unplayedIdx = ArrayList<Int>(n)
         val playedIdx = ArrayList<Int>()
         for (i in 0 until n) {
-            if (played.contains(keyOf(audios[i]))) {
+            val k = keyOf(audios[i])
+            if (stored.contains(k)) {
+                played.add(k)
                 playedIdx.add(i)
             } else {
                 unplayedIdx.add(i)
             }
         }
         if (unplayedIdx.isEmpty()) {
-            // Проход завершён — начинаем новый.
-            played = HashSet()
+            // Проход завершён — начинаем новый по всему текущему составу.
+            played.clear()
+            playedIdx.clear()
             for (i in 0 until n) {
                 unplayedIdx.add(i)
             }
-            playedIdx.clear()
         }
-        save(context, signature, played, n)
+        save(context, sourceId, played, n)
 
         val random = Random(System.nanoTime())
         shuffleInPlace(unplayedIdx, random)
@@ -116,20 +165,23 @@ object PersistentShuffle {
     }
 
     /**
-     * Отмечает трек как прозвучавший в текущем проходе. Когда прозвучали все треки прохода,
-     * очищает множество — следующий buildOrder() начнёт новый цикл по всей библиотеке.
+     * Отмечает трек как прозвучавший в текущем проходе источника sourceId. Для эфемерных
+     * очередей (sourceId == null) — no-op. Когда прозвучали все треки прохода (по последнему
+     * известному размеру состава), множество очищается — следующий buildOrder() начнёт новый
+     * цикл.
      */
-    fun markPlayed(context: Context, audio: Audio?) {
-        audio ?: return
+    fun markPlayed(context: Context, sourceId: String?, audio: Audio?) {
+        if (sourceId.isNullOrEmpty() || audio == null) {
+            return
+        }
         val prefs = PreferenceScreen.getPreferences(context)
-        val signature = prefs.getString(PREF_SIGNATURE, null) ?: return
-        val total = prefs.getInt(PREF_TOTAL, 0)
-        val played = parseSet(prefs.getString(PREF_PLAYED, null))
+        val total = prefs.getInt(PREF_TOTAL_PREFIX + sourceId, 0)
+        val played = parseSet(prefs.getString(PREF_PLAYED_PREFIX + sourceId, null))
         if (played.add(keyOf(audio))) {
             if (total in 1..played.size) {
-                prefs.edit(true) { putString(PREF_PLAYED, "") }
+                save(context, sourceId, emptySet(), total)
             } else {
-                prefs.edit(true) { putString(PREF_PLAYED, joinSet(played)) }
+                save(context, sourceId, played, null)
             }
         }
     }
