@@ -1318,22 +1318,22 @@ open class MainActivity : AppCompatActivity(), NavigationDrawerCallbacks, OnSect
         navigationView?.selectPage(sectionDrawerItem)
         if (mBottomNavigation != null) {
             when (sectionDrawerItem.section) {
-                AbsNavigationView.PAGE_FEED -> mBottomNavigation?.menu?.get(0)?.isChecked =
+                AbsNavigationView.PAGE_FEED -> mBottomNavigation?.menu?.findItem(R.id.menu_feed)?.isChecked =
                     true
 
-                AbsNavigationView.PAGE_SEARCH -> mBottomNavigation?.menu?.get(1)?.isChecked =
+                AbsNavigationView.PAGE_SEARCH -> mBottomNavigation?.menu?.findItem(R.id.menu_search)?.isChecked =
                     true
 
-                AbsNavigationView.PAGE_DIALOGS -> mBottomNavigation?.menu?.get(2)?.isChecked =
+                AbsNavigationView.PAGE_DIALOGS -> mBottomNavigation?.menu?.findItem(R.id.menu_messages)?.isChecked =
                     true
 
-                AbsNavigationView.PAGE_NOTIFICATION -> mBottomNavigation?.menu?.get(3)?.isChecked =
+                AbsNavigationView.PAGE_NOTIFICATION -> mBottomNavigation?.menu?.findItem(R.id.menu_feedback)?.isChecked =
                     true
 
-                AbsNavigationView.PAGE_MUSIC -> mBottomNavigation?.menu?.get(4)?.isChecked =
+                AbsNavigationView.PAGE_MUSIC -> mBottomNavigation?.menu?.findItem(R.id.menu_music)?.isChecked =
                     true
 
-                else -> mBottomNavigation?.menu?.get(5)?.isChecked = true
+                else -> mBottomNavigation?.menu?.findItem(R.id.menu_other)?.isChecked = true
             }
         }
         mCurrentFrontSection = sectionDrawerItem
