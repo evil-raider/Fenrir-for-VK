@@ -90,6 +90,9 @@
         <item>5 min.</item>
         <item>10 min.</item>
         <item>15 min.</item>
+        <item>30 min.</item>
+        <item>1 hour</item>
+        <item>Infinite</item>
     </string-array>
 
     <string-array name="array_lifecycle_items" translatable="false">
@@ -98,6 +101,9 @@
         <item>300000</item>
         <item>600000</item>
         <item>900000</item>
+        <item>1800000</item>
+        <item>3600000</item>
+        <item>-1</item>
     </string-array>
 
     <string-array name="array_ffmpeg_names">
@@ -1817,7 +1823,7 @@
     <string name="dump_fcm">Debug firebase</string>
     <string name="need_restart">Restart required</string>
     <string name="enable_native">Enable native libraries</string>
-    <string name="lifecycle_music_service">Audio service lifetime (sec)</string>
+    <string name="lifecycle_music_service">Player lifetime on pause</string>
     <string name="ffmpeg_audio_codecs">FFmpeg audio codecs</string>
     <string name="strip_news_repost">Hide reposts in feed</string>
     <string name="need_refresh">Requires list refresh</string>

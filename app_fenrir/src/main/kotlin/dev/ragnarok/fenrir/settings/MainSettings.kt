@@ -426,7 +426,9 @@ internal class MainSettings(context: Context) : IMainSettings {
                 "lifecycle_music_service", Constants.AUDIO_PLAYER_SERVICE_IDLE.toString()
             )!!
                 .trim().toInt()
-            if (v < 60000) {
+            if (v < 0) {
+                v = -1 // бесконечно
+            } else if (v < 60000) {
                 getPreferences(app).edit { putString("lifecycle_music_service", "60000") }
                 v = 60000
             }

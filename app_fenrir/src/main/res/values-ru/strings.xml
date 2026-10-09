@@ -32,6 +32,9 @@
         <item>5 мин.</item>
         <item>10 мин.</item>
         <item>15 мин.</item>
+        <item>30 мин.</item>
+        <item>1 час</item>
+        <item>Бесконечно</item>
     </string-array>
 
     <string-array name="array_ffmpeg_names">
@@ -1566,7 +1569,7 @@
     <string name="dump_fcm">Отладка firebase</string>
     <string name="need_restart">Требуется перезапуск</string>
     <string name="enable_native">Использовать нативные библиотеки</string>
-    <string name="lifecycle_music_service">Время жизни плеера (сек.)</string>
+    <string name="lifecycle_music_service">Время жизни плеера на паузе</string>
     <string name="ffmpeg_audio_codecs">FFmpeg аудио кодеки</string>
     <string name="strip_news_repost">Убрать репосты из новостей</string>
     <string name="need_refresh">Требует обновить список</string>

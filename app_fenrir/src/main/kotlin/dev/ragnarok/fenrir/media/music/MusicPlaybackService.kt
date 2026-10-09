@@ -93,6 +93,44 @@ class MusicPlaybackService : MediaSessionService() {
     private lateinit var customCommands: List<CommandButton>
     private var shutdownDelayedDisposable = CancelableJob()
 
+    // FENRIR-CI: держим сервис в foreground и на паузе, пока не истечёт «время жизни плеера»
+    // (или бесконечно). Иначе Media3 через ≤10 мин снимает foreground, и система убивает
+    // процесс вместе с плеером в шторке. На паузе это бесплатно для батареи: wake lock
+    // ExoPlayer отпущен, CPU не используется — просто процесс не выгружается.
+    private var hasBeenPlaying = false
+    private var stopRequested = false
+
+    internal fun shouldKeepForeground(): Boolean =
+        hasBeenPlaying && !stopRequested && musicPlayer.exoplayer.mediaItemCount > 0
+
+    internal fun stopPlaybackService() {
+        stopRequested = true
+        shutdownDelayedDisposable.cancel()
+        pauseAllPlayersAndStopSelf()
+    }
+
+    internal fun onPlaybackStarted() {
+        hasBeenPlaying = true
+        stopRequested = false
+        shutdownDelayedDisposable.cancel()
+    }
+
+    override fun onUpdateNotificationAsync(
+        session: MediaSession,
+        startInForegroundRequired: Boolean
+    ): ListenableFuture<Void?> = super.onUpdateNotificationAsync(
+        session,
+        startInForegroundRequired || shouldKeepForeground()
+    )
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Смахнули из «недавних» на паузе — плеер живёт до истечения таймера.
+        if (shouldKeepForeground()) {
+            return
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     // FENRIR-CI: метка активной очереди. "myaudio_<accountId>", когда играет «Моя музыка»
     // этого аккаунта; null для любых других запусков (openFile/open/чужой плейлист).
     // По ней живая дозапись офлайна понимает, что играет именно та очередь, и не лезет в чужую.
@@ -142,8 +180,10 @@ class MusicPlaybackService : MediaSessionService() {
             )
             return true
         }
-        Logger.d(TAG, "onUnbind, stopSelf(mServiceStartId)")
-        pauseAllPlayersAndStopSelf()
+        // FENRIR-CI: раньше здесь сервис убивался сразу, как только закрывалась активити
+        // при плеере на паузе — отсюда «мгновенно исчезающий» плеер в шторке. Теперь
+        // его жизнь определяет только таймер scheduleDelayedShutdown (настройка).
+        Logger.d(TAG, "onUnbind, keep service until lifetime timer")
         return true
     }
 
@@ -188,7 +228,7 @@ class MusicPlaybackService : MediaSessionService() {
                     ): ListenableFuture<SessionResult> {
                         return when (customCommand.customAction) {
                             CUSTOM_COMMAND_CLOSE -> {
-                                pauseAllPlayersAndStopSelf()
+                                stopPlaybackService()
                                 Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                             }
 
@@ -318,12 +358,22 @@ class MusicPlaybackService : MediaSessionService() {
     }
 
     internal fun scheduleDelayedShutdown() {
-        val delay = Settings.get().main().musicLifecycle
+        var delay = Settings.get().main().musicLifecycle
         shutdownDelayedDisposable.cancel()
+        if (stopRequested) {
+            return
+        }
+        if (delay < 0) {
+            // «Бесконечно»: не гасим плеер с очередью; пустой сервис всё равно закрываем.
+            if (musicPlayer.exoplayer.mediaItemCount > 0) {
+                return
+            }
+            delay = Constants.AUDIO_PLAYER_SERVICE_IDLE
+        }
         if (Constants.IS_DEBUG) Log.v(TAG, "Scheduling shutdown in $delay ms")
         shutdownDelayedDisposable.set(
             delayTaskFlow(delay.toLong())
-                .toMain { pauseAllPlayersAndStopSelf() })
+                .toMain { stopPlaybackService() })
     }
 
     internal fun notifyChange(what: String) {
@@ -797,7 +847,7 @@ class MusicPlaybackService : MediaSessionService() {
                     if (!isPlaying) {
                         mService.get()?.scheduleDelayedShutdown()
                     } else {
-                        mService.get()?.shutdownDelayedDisposable?.cancel()
+                        mService.get()?.onPlaybackStarted()
                     }
                 }
 
@@ -924,7 +974,7 @@ class MusicPlaybackService : MediaSessionService() {
                         if (errorsCount > 4) {
                             errorsCount = 0
                             if (hasErrorPlayback) {
-                                it.pauseAllPlayersAndStopSelf()
+                                it.stopPlaybackService()
                             } else if (exoplayer.hasNextMediaItem()) {
                                 hasErrorPlayback = true
                                 val pos = exoplayer.currentMediaItemIndex
@@ -1294,7 +1344,7 @@ class MusicPlaybackService : MediaSessionService() {
 
         override fun stop() {
             mService.get()?.pause()
-            mService.get()?.pauseAllPlayersAndStopSelf()
+            mService.get()?.stopPlaybackService()
         }
 
         override fun pause() {
