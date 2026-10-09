@@ -27,6 +27,34 @@ jobs:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
         run: bash ci/ci.sh
+      - name: Publish GitHub Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -nE 's/^appVersionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' gradle/libs.versions.toml | head -n1)"
+          [ -n "$VERSION" ] || VERSION="build"
+          SIGNED="ci-out/Fenrir-release-signed.apk"
+          if [ -f "$SIGNED" ]; then
+            APK="$SIGNED"; PRE=""; KIND="release (signed)"
+          else
+            APK="$(find ci-out -maxdepth 1 -name '*.apk' | head -n1)"; PRE="--prerelease"; KIND="debug (KEYSTORE secrets not set)"
+          fi
+          [ -n "$APK" ] && [ -f "$APK" ] || { echo "No APK found in ci-out"; exit 1; }
+          TAG="$VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            TAG="${VERSION}-build${GITHUB_RUN_NUMBER}"
+          fi
+          OUT_APK="Fenrir-${TAG}.apk"
+          cp "$APK" "$OUT_APK"
+          gh release create "$TAG" "$OUT_APK" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Fenrir $TAG" \
+            --notes "Build type: ${KIND}. Built by GitHub Actions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --generate-notes $PRE
+          echo "Published release $TAG with $OUT_APK"
       - name: Upload outputs
         if: always()
         uses: actions/upload-artifact@v4
