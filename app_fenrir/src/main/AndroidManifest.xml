@@ -649,9 +649,22 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </service>
+
+        <!-- FENRIR-CI: «возобновление по кнопке гарнитуры». Система запоминает этот receiver
+             у последнего игравшего плеера и шлёт ему Play, даже когда сервиса уже нет
+             (закрыт в шторке / процесс выгружен / после перезагрузки). Receiver поднимает
+             MusicPlaybackService, а тот восстанавливает очередь в onPlaybackResumption. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="dev.ragnarok.fenrir.db.FenrirContentProvider"

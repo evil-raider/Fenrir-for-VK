@@ -22,18 +22,25 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Player.MediaItemTransitionReason
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
 import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
 import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.source.ShuffleOrder
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -46,6 +53,7 @@ import androidx.work.WorkManager
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
 import de.maxr1998.modernpreferences.PreferenceScreen
 import dev.ragnarok.fenrir.Constants
 import dev.ragnarok.fenrir.Extra
@@ -78,6 +86,7 @@ import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.toMain
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.io.File
+import java.io.IOException
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import kotlin.random.Random
@@ -250,6 +259,30 @@ class MusicPlaybackService : MediaSessionService() {
                             else -> super.onCustomCommand(session, controller, customCommand, args)
                         }
                     }
+
+                    // FENRIR-CI: «возобновление по кнопке гарнитуры». Media3 зовёт это, когда
+                    // пришёл Play (MediaButtonReceiver поднял сервис), а очередь плеера пуста:
+                    // плеер закрыли в шторке, процесс выгружен или телефон перезагружен.
+                    // Поднимаем последнюю сохранённую очередь с той же позиции.
+                    override fun onPlaybackResumption(
+                        mediaSession: MediaSession,
+                        controller: MediaSession.ControllerInfo,
+                        isForPlayback: Boolean
+                    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+                        val result = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
+                        PlaybackResumeStore.loadAsync(this@MusicPlaybackService) { snapshot ->
+                            if (snapshot == null) {
+                                result.setException(UnsupportedOperationException("No saved queue"))
+                            } else {
+                                try {
+                                    result.set(prepareResumption(snapshot, isForPlayback))
+                                } catch (e: Throwable) {
+                                    result.setException(e)
+                                }
+                            }
+                        }
+                        return result
+                    }
                 })
                 .setBitmapLoader(CacheBitmapLoader(object : BitmapLoader {
                     private val limit by lazy { MediaSession.getBitmapDimensionLimit(this@MusicPlaybackService) }
@@ -352,9 +385,76 @@ class MusicPlaybackService : MediaSessionService() {
     override fun onDestroy() {
         if (Constants.IS_DEBUG) Logger.d(TAG, "Destroying service")
         shutdownDelayedDisposable.cancel()
+        saveResumeState()
         mediaSession.release()
         musicPlayer.release()
         super.onDestroy()
+    }
+
+    // FENRIR-CI: восстановление очереди по кнопке гарнитуры (см. onPlaybackResumption).
+    // isForPlayback=false — это только запрос метаданных (карточка «возобновить» в System UI):
+    // отдаём один текущий трек без побочных эффектов.
+    internal fun prepareResumption(
+        snapshot: PlaybackResumeStore.Snapshot,
+        isForPlayback: Boolean
+    ): MediaSession.MediaItemsWithStartPosition {
+        synchronized(this) {
+            if (!isForPlayback) {
+                return MediaSession.MediaItemsWithStartPosition(
+                    listOf(musicPlayer.makeMediaItem(snapshot.audios[snapshot.index])),
+                    0,
+                    snapshot.positionMs
+                )
+            }
+            if (Constants.IS_DEBUG) Logger.d(
+                TAG,
+                "Resuming saved queue: ${snapshot.audios.size} tracks, index ${snapshot.index}"
+            )
+            currentQueueId = snapshot.queueId
+            stopRequested = false
+            RestoredUrlRefresher.reset(snapshot.audios)
+            musicPlayer.beginExternalRestore(snapshot.audios)
+            val items = ArrayList<MediaItem>(snapshot.audios.size)
+            for (audio in snapshot.audios) {
+                items.add(musicPlayer.makeMediaItem(audio))
+            }
+            refreshMediaButtonCustomLayout()
+            return MediaSession.MediaItemsWithStartPosition(
+                items,
+                snapshot.index,
+                snapshot.positionMs
+            )
+        }
+    }
+
+    // FENRIR-CI: очередь в порядке media item'ов ExoPlayer (не в порядке шафла) — так
+    // сохранённый индекс однозначно указывает на трек.
+    internal fun saveResumeQueue() {
+        val player = musicPlayer.exoplayer
+        val count = player.mediaItemCount
+        if (count <= 0) {
+            return
+        }
+        val audios = ArrayList<Audio>(count)
+        for (i in 0 until count) {
+            val audio = player.getMediaItemAt(i).localConfiguration?.tag as? Audio ?: return
+            audios.add(audio)
+        }
+        PlaybackResumeStore.saveQueue(this, audios, currentQueueId)
+    }
+
+    internal fun saveResumeState() {
+        val player = musicPlayer.exoplayer
+        if (player.mediaItemCount <= 0) {
+            return
+        }
+        val position = player.currentPosition
+        PlaybackResumeStore.saveState(
+            this,
+            player.currentMediaItemIndex,
+            if (position == C.TIME_UNSET) 0 else position,
+            musicPlayer.currentAudio
+        )
     }
 
     internal fun scheduleDelayedShutdown() {
@@ -527,7 +627,7 @@ class MusicPlaybackService : MediaSessionService() {
                         else -> EXTENSION_RENDERER_MODE_OFF
                     }
                 )
-        ).build()
+        ).setMediaSourceFactory(FenrirMediaSourceFactory()).build()
         private val cancelableJob = CancelableJob()
         private val audioInteractor: IAudioInteractor = InteractorFactory.createAudioInteractor()
         var isPreparing = false
@@ -541,6 +641,10 @@ class MusicPlaybackService : MediaSessionService() {
         private var errorsCount = 0
         private var hasErrorPlayback = false
 
+        // FENRIR-CI: шафл восстановленной очереди включаем после того, как Media3 выставит
+        // media item'ы (см. beginExternalRestore / onTimelineChanged).
+        private var pendingRestoreShuffle = false
+
         // FENRIR-CI: полная текущая очередь для построения персистентного шафл-порядка.
         private var currentQueue: List<Audio> = emptyList()
         val factory = Utils.getExoPlayerFactory(
@@ -550,7 +654,40 @@ class MusicPlaybackService : MediaSessionService() {
         val factoryLocal =
             DefaultDataSource.Factory(service)
 
-        internal fun makeMediaSource(audio: Audio): MediaSource {
+        // FENRIR-CI: ExoPlayer строит источники через эту фабрику и тогда, когда очередь
+        // выставляет не Fenrir, а сама Media3 (onPlaybackResumption, replaceMediaItem):
+        // для item'ов с тегом Audio — та же логика, что и при обычном запуске (UA, прокси,
+        // локальные копии, HLS); для чужих item'ов — стандартная фабрика.
+        private inner class FenrirMediaSourceFactory : MediaSource.Factory {
+            private val fallback by lazy { DefaultMediaSourceFactory(factory) }
+
+            override fun setDrmSessionManagerProvider(
+                drmSessionManagerProvider: DrmSessionManagerProvider
+            ): MediaSource.Factory {
+                fallback.setDrmSessionManagerProvider(drmSessionManagerProvider)
+                return this
+            }
+
+            override fun setLoadErrorHandlingPolicy(
+                loadErrorHandlingPolicy: LoadErrorHandlingPolicy
+            ): MediaSource.Factory {
+                fallback.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                return this
+            }
+
+            override fun getSupportedTypes(): IntArray = fallback.supportedTypes
+
+            override fun createMediaSource(mediaItem: MediaItem): MediaSource {
+                val audio = mediaItem.localConfiguration?.tag as? Audio
+                    ?: return fallback.createMediaSource(mediaItem)
+                return buildMediaSource(mediaItem, audio)
+            }
+        }
+
+        internal fun makeMediaSource(audio: Audio): MediaSource =
+            buildMediaSource(makeMediaItem(audio), audio)
+
+        internal fun makeMediaItem(audio: Audio): MediaItem {
             if (!audio.isLocal && !audio.isLocalServer && TrackIsDownloaded(audio) == 1) {
                 // FENRIR-CI: локальную копию используем только если файл реально существует;
                 // иначе (файл удалён мимо приложения) откатываемся на онлайн-ссылку.
@@ -577,12 +714,19 @@ class MusicPlaybackService : MediaSessionService() {
                     }
                 }
             }
-            val url = Utils.firstNonEmptyString(
-                res,
-                "file:///android_asset/audio_error.ogg"
-            )
-            val mediaItem =
-                MediaItem.Builder().setUri(url).setMediaId("${audio.id}_${audio.ownerId}")
+            val url = if (res.isNullOrEmpty() && !audio.isLocal && !audio.isLocalServer
+                && RestoredUrlRefresher.isStale(audio)
+            ) {
+                // FENRIR-CI: трек из восстановленной очереди без ссылки — ссылку получим
+                // при загрузке (ResolvingDataSource), а не сразу заглушку «недоступен».
+                RestoredUrlRefresher.placeholderUri(audio)
+            } else {
+                Utils.firstNonEmptyString(
+                    res,
+                    "file:///android_asset/audio_error.ogg"
+                )
+            }
+            return MediaItem.Builder().setUri(url).setMediaId("${audio.id}_${audio.ownerId}")
                     .setTag(audio)
                     .setMediaMetadata(
                         MediaMetadata.Builder().setTitle(audio.title).setArtist(audio.artist)
@@ -597,20 +741,101 @@ class MusicPlaybackService : MediaSessionService() {
                             .build()
                     )
                     .build()
-            return if (url?.contains("index.m3u8") == true)
-                HlsMediaSource.Factory(factory)
+        }
+
+        internal fun buildMediaSource(mediaItem: MediaItem, audio: Audio): MediaSource {
+            val url = mediaItem.localConfiguration?.uri?.toString()
+            if (url?.contains("index.m3u8") != true
+                && (url?.contains("file://") == true || url?.contains("content://") == true)
+            ) {
+                return ProgressiveMediaSource.Factory(factoryLocal)
                     .createMediaSource(mediaItem)
-            else if (url?.contains("file://") == true || url?.contains("content://") == true) {
-                ProgressiveMediaSource.Factory(factoryLocal)
-                    .createMediaSource(mediaItem)
-            } else {
-                ProgressiveMediaSource.Factory(
+            }
+            val upstream: DataSource.Factory =
+                if (url != null && url.startsWith("http") && RestoredUrlRefresher.isStale(audio)) {
+                    restoringDataSourceFactory(audio, url)
+                } else {
                     factory
-                ).createMediaSource(mediaItem)
+                }
+            return if (url?.contains("index.m3u8") == true)
+                HlsMediaSource.Factory(upstream)
+                    .createMediaSource(mediaItem)
+            else {
+                ProgressiveMediaSource.Factory(upstream).createMediaSource(mediaItem)
             }
         }
 
+        // FENRIR-CI: подменяет протухшую ссылку восстановленного трека на свежую прямо перед
+        // загрузкой (поток загрузчика ExoPlayer, блокирующий запрос допустим). Если тип
+        // потока поменялся (mp3 <-> HLS) или ссылки нет — бросаем IOException, и onPlayerError
+        // пересоберёт media item с уже обновлённой ссылкой (tryRebuildRestoredItem).
+        private fun restoringDataSourceFactory(audio: Audio, builtUrl: String): DataSource.Factory =
+            ResolvingDataSource.Factory(factory, object : ResolvingDataSource.Resolver {
+                override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
+                    if (dataSpec.uri.toString() != builtUrl) {
+                        return dataSpec
+                    }
+                    RestoredUrlRefresher.refreshBlocking(audio)
+                    val fresh = RestoredUrlRefresher.freshUrl(audio)
+                    if (fresh == null) {
+                        if (RestoredUrlRefresher.isPlaceholder(builtUrl)) {
+                            throw IOException("Restored track has no url")
+                        }
+                        return dataSpec
+                    }
+                    if (fresh == builtUrl) {
+                        return dataSpec
+                    }
+                    if (fresh.contains("index.m3u8") != builtUrl.contains("index.m3u8")) {
+                        throw IOException("Restored track stream type changed")
+                    }
+                    return dataSpec.withUri(fresh.toUri())
+                }
+            })
+
+        // FENRIR-CI: см. restoringDataSourceFactory. Один раз на трек.
+        private fun tryRebuildRestoredItem(): Boolean {
+            val index = exoplayer.currentMediaItemIndex
+            val item = exoplayer.currentMediaItem ?: return false
+            val audio = item.localConfiguration?.tag as? Audio ?: return false
+            if (index == C.INDEX_UNSET || !RestoredUrlRefresher.takeRebuildCandidate(audio)) {
+                return false
+            }
+            val rebuilt = makeMediaItem(audio)
+            if (rebuilt.localConfiguration?.uri == item.localConfiguration?.uri) {
+                return false
+            }
+            val position = exoplayer.currentPosition
+            exoplayer.replaceMediaItem(index, rebuilt)
+            exoplayer.prepare()
+            exoplayer.seekTo(index, if (position == C.TIME_UNSET) 0 else position)
+            exoplayer.play()
+            return true
+        }
+
+        // FENRIR-CI: синхронизирует внутреннее состояние перед тем, как Media3 сама выставит
+        // восстановленную очередь (onPlaybackResumption -> setMediaItems -> play).
+        fun beginExternalRestore(audios: List<Audio>) {
+            val service = mService.get() ?: return
+            errorsCount = 0
+            hasErrorPlayback = false
+            isPreparing = true
+            isPrepared = false
+            currentQueue = ArrayList(audios)
+            val prefs = PreferenceScreen.getPreferences(service)
+            exoplayer.repeatMode = prefs.getInt(PREFS_REPEAT, Player.REPEAT_MODE_OFF)
+            pendingRestoreShuffle = prefs.getBoolean(PREFS_SHUFFLE, false)
+            exoplayer.shuffleModeEnabled = false
+            exoplayer.setAudioAttributes(
+                AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .setUsage(C.USAGE_MEDIA).build(), true
+            )
+        }
+
         fun setSources(audios: List<Audio>) {
+            // FENRIR-CI: новая очередь из приложения — свежие ссылки, восстановление не нужно.
+            RestoredUrlRefresher.clear()
+            pendingRestoreShuffle = false
             errorsCount = 0
             hasErrorPlayback = false
             isPreparing = true
@@ -845,6 +1070,7 @@ class MusicPlaybackService : MediaSessionService() {
                         hasErrorPlayback = false
                     }
                     if (!isPlaying) {
+                        mService.get()?.saveResumeState()
                         mService.get()?.scheduleDelayedShutdown()
                     } else {
                         mService.get()?.onPlaybackStarted()
@@ -872,6 +1098,7 @@ class MusicPlaybackService : MediaSessionService() {
                     ) {
                         mService.get()?.onceCloseMiniPlayer = false
                         mService.get()?.notifyChange(META_CHANGED)
+                        mService.get()?.saveResumeState()
 
                         // FENRIR-CI: отмечаем реально прозвучавший трек для персистентного шафла,
                         // чтобы охват был равномерным даже при частых прерываниях/перезапусках.
@@ -968,7 +1195,32 @@ class MusicPlaybackService : MediaSessionService() {
                     mService.get()?.broadcastAudioSession()
                 }
 
+                // FENRIR-CI: любая смена состава очереди -> сохраняем её для возобновления;
+                // для восстановленной очереди здесь же включаем сохранённый шафл.
+                override fun onTimelineChanged(
+                    timeline: Timeline,
+                    @Player.TimelineChangeReason reason: Int
+                ) {
+                    if (reason != Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
+                        return
+                    }
+                    val service = mService.get() ?: return
+                    if (pendingRestoreShuffle && exoplayer.mediaItemCount > 0) {
+                        pendingRestoreShuffle = false
+                        if (exoplayer.mediaItemCount == currentQueue.size) {
+                            shuffleMode = true
+                            service.notifyChange(SHUFFLE_MODE_CHANGED)
+                        }
+                        service.notifyChange(QUEUE_CHANGED)
+                        service.refreshMediaButtonCustomLayout()
+                    }
+                    service.saveResumeQueue()
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
+                    if (tryRebuildRestoredItem()) {
+                        return
+                    }
                     mService.get()?.let {
                         errorsCount++
                         if (errorsCount > 4) {
