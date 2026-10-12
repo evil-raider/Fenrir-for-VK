@@ -1,0 +1,372 @@
+=== CI start Mon Oct 12 23:38:42 UTC 2026 ===
+
+==================== Patch sources: force finalized targetSdk=36 (installable on release Android) ====================
+appCompileSDK = "37"
+appTargetSDK = "36"
+73:        checkReleaseBuilds = false
+
+==================== Install SDK packages ====================
+yes: standard output: Broken pipe
+Loading package information...                                                  Loading local repository...                                                     [                                       ] 3% Loading local repository...        [                                       ] 3% Fetch remote repository...         [=                                      ] 3% Fetch remote repository...         [=                                      ] 4% Fetch remote repository...         [=                                      ] 5% Fetch remote repository...         [==                                     ] 5% Fetch remote repository...         [==                                     ] 6% Fetch remote repository...         [==                                     ] 7% Fetch remote repository...         [==                                     ] 7% Computing updates...               [===                                    ] 8% Computing updates...               [===                                    ] 10% Computing updates...              [===                                    ] 10% Installing NDK (Side by side) 30.0[===                                    ] 10% Downloading android-ndk-r30-beta2-[====                                   ] 10% Downloading android-ndk-r30-beta2-[====                                   ] 11% Downloading android-ndk-r30-beta2-[====                                   ] 12% Downloading android-ndk-r30-beta2-[=====                                  ] 13% Downloading android-ndk-r30-beta2-[=====                                  ] 14% Downloading android-ndk-r30-beta2-[=====                                  ] 15% Downloading android-ndk-r30-beta2-[======                                 ] 15% Downloading android-ndk-r30-beta2-[======                                 ] 16% Downloading android-ndk-r30-beta2-[======                                 ] 17% Downloading android-ndk-r30-beta2-[=======                                ] 18% Downloading android-ndk-r30-beta2-[=======                                ] 19% Downloading android-ndk-r30-beta2-[=======                                ] 20% Downloading android-ndk-r30-beta2-[========                               ] 20% Downloading android-ndk-r30-beta2-[========                               ] 21% Downloading android-ndk-r30-beta2-[========                               ] 22% Downloading android-ndk-r30-beta2-[=========                              ] 23% Downloading android-ndk-r30-beta2-[=========                              ] 24% Downloading android-ndk-r30-beta2-[=========                              ] 25% Downloading android-ndk-r30-beta2-[==========                             ] 25% Downloading android-ndk-r30-beta2-[==========                             ] 26% Downloading android-ndk-r30-beta2-[==========                             ] 27% Downloading android-ndk-r30-beta2-[===========                            ] 28% Downloading android-ndk-r30-beta2-[===========                            ] 29% Downloading android-ndk-r30-beta2-[===========                            ] 30% Downloading android-ndk-r30-beta2-[============                           ] 30% Downloading android-ndk-r30-beta2-[============                           ] 31% Downloading android-ndk-r30-beta2-[============                           ] 32% Downloading android-ndk-r30-beta2-[============                           ] 33% Downloading android-ndk-r30-beta2-[============                           ] 33% Unzipping...                      [============                           ] 33% Unzipping... android-ndk-r30-beta2[=============                          ] 33% Unzipping... android-ndk-r30-beta2[=============                          ] 34% Unzipping... android-ndk-r30-beta2[=============                          ] 35% Unzipping... android-ndk-r30-beta2[==============                         ] 35% Unzipping... android-ndk-r30-beta2[==============                         ] 36% Unzipping... android-ndk-r30-beta2[==============                         ] 37% Unzipping... android-ndk-r30-beta2[===============                        ] 38% Unzipping... android-ndk-r30-beta2[===============                        ] 39% Unzipping... android-ndk-r30-beta2[===============                        ] 40% Unzipping... android-ndk-r30-beta2[================                       ] 40% Unzipping... android-ndk-r30-beta2[================                       ] 41% Unzipping... android-ndk-r30-beta2[================                       ] 42% Unzipping... android-ndk-r30-beta2[=================                      ] 43% Unzipping... android-ndk-r30-beta2[=================                      ] 44% Unzipping... android-ndk-r30-beta2[=================                      ] 45% Unzipping... android-ndk-r30-beta2[==================                     ] 45% Unzipping... android-ndk-r30-beta2[==================                     ] 46% Unzipping... android-ndk-r30-beta2[==================                     ] 47% Unzipping... android-ndk-r30-beta2[===================                    ] 48% Unzipping... android-ndk-r30-beta2[===================                    ] 49% Unzipping... android-ndk-r30-beta2[===================                    ] 50% Unzipping... android-ndk-r30-beta2[====================                   ] 50% Unzipping... android-ndk-r30-beta2[====================                   ] 51% Unzipping... android-ndk-r30-beta2[====================                   ] 52% Unzipping... android-ndk-r30-beta2[=====================                  ] 53% Unzipping... android-ndk-r30-beta2[=====================                  ] 54% Unzipping... android-ndk-r30-beta2[=====================                  ] 55% Unzipping... android-ndk-r30-beta2[=======================================] 100% Unzipping... android-ndk-r30-beta
+
+platforms:
+android-34
+android-34-ext10
+android-34-ext11
+android-34-ext12
+android-34-ext8
+android-35
+android-35-ext14
+android-35-ext15
+android-36
+android-36-ext18
+android-36-ext19
+android-36.1
+android-37
+android-37.0
+android-37.1
+android-37.2
+android-37.2-beta1
+android-37.2-beta2
+android-37.2-beta3
+ndk exists: yes
+native cache asset: native-192f327e21ab81e8.aar
+
+==================== Native aar: CACHE HIT ====================
+compiled_native:
+total 11828
+drwxr-xr-x  2 runner runner     4096 Oct 12 23:39 .
+drwxr-xr-x 20 runner runner     4096 Oct 12 23:39 ..
+-rw-r--r--  1 runner runner 12100714 Oct 12 23:39 native-release.aar
+
+==================== Build :app_fenrir:assembleFenrirRelease (R8, signed with user keystore) ====================
+
+Welcome to Gradle 9.6.1!
+
+Here are the highlights of this release:
+ - Improved Configuration Cache hit rates
+ - Additional CLI rendering options
+ - Important project hierarchy lookup deprecations
+
+For more details see https://docs.gradle.org/9.6.1/release-notes.html
+
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.6.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :camera2:preBuild UP-TO-DATE
+> Task :fenrir_common:preBuild UP-TO-DATE
+> Task :app_fenrir:preBuild UP-TO-DATE
+> Task :firebase-installations:preBuild UP-TO-DATE
+> Task :camera2:preReleaseBuild UP-TO-DATE
+> Task :app_fenrir:preFenrirReleaseBuild UP-TO-DATE
+> Task :fenrir_common:preReleaseBuild UP-TO-DATE
+> Task :firebase-installations:preFenrirReleaseBuild UP-TO-DATE
+> Task :camera2:mergeReleaseJniLibFolders
+> Task :firebase-installations:mergeFenrirReleaseJniLibFolders
+> Task :app_fenrir:mergeFenrirReleaseJniLibFolders
+> Task :image:preBuild UP-TO-DATE
+> Task :image:preReleaseBuild UP-TO-DATE
+> Task :fenrir_common:mergeReleaseJniLibFolders
+> Task :image:mergeReleaseJniLibFolders
+> Task :camera2:mergeReleaseNativeLibs NO-SOURCE
+> Task :image:mergeReleaseNativeLibs NO-SOURCE
+> Task :fenrir_common:mergeReleaseNativeLibs NO-SOURCE
+> Task :firebase-installations:mergeFenrirReleaseNativeLibs NO-SOURCE
+> Task :fenrir_common:copyReleaseJniLibsProjectOnly
+> Task :camera2:copyReleaseJniLibsProjectOnly
+> Task :material:preBuild UP-TO-DATE
+> Task :material:preReleaseBuild UP-TO-DATE
+> Task :image:copyReleaseJniLibsProjectOnly
+> Task :firebase-installations:copyFenrirReleaseJniLibsProjectOnly
+> Task :picasso3:preBuild UP-TO-DATE
+> Task :picasso3:preReleaseBuild UP-TO-DATE
+> Task :recyclerview:preBuild UP-TO-DATE
+> Task :recyclerview:preReleaseBuild UP-TO-DATE
+> Task :preference:preBuild UP-TO-DATE
+> Task :preference:preReleaseBuild UP-TO-DATE
+> Task :material:mergeReleaseJniLibFolders
+> Task :recyclerview:mergeReleaseJniLibFolders
+> Task :material:mergeReleaseNativeLibs NO-SOURCE
+> Task :preference:mergeReleaseJniLibFolders
+> Task :material:copyReleaseJniLibsProjectOnly
+> Task :picasso3:mergeReleaseJniLibFolders
+> Task :recyclerview:mergeReleaseNativeLibs NO-SOURCE
+> Task :preference:mergeReleaseNativeLibs NO-SOURCE
+> Task :picasso3:mergeReleaseNativeLibs NO-SOURCE
+> Task :recyclerview:copyReleaseJniLibsProjectOnly
+> Task :preference:copyReleaseJniLibsProjectOnly
+> Task :picasso3:copyReleaseJniLibsProjectOnly
+> Task :fenrir_common:generateReleaseBuildConfig
+> Task :recyclerview:generateReleaseResources
+> Task :fenrir_common:generateReleaseResources
+> Task :recyclerview:packageReleaseResources
+> Task :fenrir_common:packageReleaseResources
+> Task :fenrir_common:processReleaseNavigationResources
+> Task :recyclerview:processReleaseNavigationResources
+> Task :recyclerview:parseReleaseLocalResources
+> Task :app_fenrir:mergeFenrirReleaseNativeLibs
+> Task :fenrir_common:parseReleaseLocalResources
+> Task :recyclerview:generateReleaseRFile
+> Task :fenrir_common:generateReleaseRFile
+> Task :fenrir_common:javaPreCompileRelease
+> Task :firebase-installations:generateFenrirReleaseBuildConfig
+> Task :firebase-installations:generateFenrirReleaseResources
+> Task :firebase-installations:packageFenrirReleaseResources
+> Task :firebase-installations:processFenrirReleaseNavigationResources
+> Task :firebase-installations:parseFenrirReleaseLocalResources
+> Task :app_fenrir:stripFenrirReleaseDebugSymbols
+> Task :firebase-installations:generateFenrirReleaseRFile
+> Task :app_fenrir:extractFenrirReleaseNativeSymbolTables
+> Task :app_fenrir:mergeFenrirReleaseNativeDebugMetadata NO-SOURCE
+> Task :material:generateReleaseResources
+> Task :picasso3:generateReleaseBuildConfig
+> Task :picasso3:generateReleaseResources
+> Task :picasso3:packageReleaseResources
+> Task :picasso3:processReleaseNavigationResources
+> Task :picasso3:parseReleaseLocalResources
+> Task :picasso3:generateReleaseRFile
+> Task :material:packageReleaseResources
+> Task :material:processReleaseNavigationResources
+> Task :material:parseReleaseLocalResources
+> Task :material:generateReleaseRFile
+> Task :recyclerview:javaPreCompileRelease
+> Task :material:javaPreCompileRelease
+> Task :firebase-installations:javaPreCompileFenrirRelease
+> Task :picasso3:javaPreCompileRelease
+> Task :image:generateReleaseResources
+> Task :image:packageReleaseResources
+> Task :image:processReleaseNavigationResources
+> Task :image:parseReleaseLocalResources
+> Task :image:generateReleaseRFile
+> Task :image:javaPreCompileRelease
+> Task :preference:generateReleaseResources
+> Task :preference:packageReleaseResources
+> Task :preference:processReleaseNavigationResources
+> Task :preference:parseReleaseLocalResources
+> Task :preference:generateReleaseRFile
+> Task :preference:javaPreCompileRelease
+> Task :camera2:generateReleaseResources
+> Task :camera2:packageReleaseResources
+> Task :camera2:processReleaseNavigationResources
+> Task :camera2:parseReleaseLocalResources
+> Task :camera2:generateReleaseRFile
+> Task :firebase-installations:compileFenrirReleaseKotlin
+> Task :recyclerview:compileReleaseKotlin
+
+> Task :firebase-installations:compileFenrirReleaseJavaWithJavac
+Note: /home/runner/work/Fenrir-for-VK/Fenrir-for-VK/firebase-installations/src/main/java/com/google/firebase/installations/FirebaseInstallationsException.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+> Task :firebase-installations:mergeFenrirReleaseGeneratedProguardFiles
+> Task :firebase-installations:exportFenrirReleaseConsumerProguardFiles
+> Task :camera2:javaPreCompileRelease
+> Task :app_fenrir:checkFenrirReleaseDuplicateClasses
+> Task :app_fenrir:compileFenrirReleaseAidl
+> Task :app_fenrir:generateFenrirReleaseBuildConfig
+> Task :app_fenrir:generateFenrirReleaseResources
+> Task :app_fenrir:processFenrirReleaseGoogleServices
+> Task :app_fenrir:packageFenrirReleaseResources
+> Task :app_fenrir:processFenrirReleaseNavigationResources
+> Task :app_fenrir:parseFenrirReleaseLocalResources
+> Task :app_fenrir:generateFenrirReleaseRFile
+> Task :firebase-installations:bundleLibCompileToJarFenrirRelease
+> Task :app_fenrir:javaPreCompileFenrirRelease
+> Task :camera2:prepareReleaseArtProfile
+> Task :fenrir_common:prepareReleaseArtProfile
+> Task :firebase-installations:prepareFenrirReleaseArtProfile
+> Task :image:prepareReleaseArtProfile
+> Task :material:prepareReleaseArtProfile
+> Task :picasso3:prepareReleaseArtProfile
+> Task :preference:prepareReleaseArtProfile
+> Task :camera2:writeReleaseAarMetadata
+> Task :fenrir_common:writeReleaseAarMetadata
+> Task :firebase-installations:writeFenrirReleaseAarMetadata
+> Task :image:writeReleaseAarMetadata
+
+> Task :recyclerview:compileReleaseJavaWithJavac
+Note: /home/runner/work/Fenrir-for-VK/Fenrir-for-VK/recyclerview/src/main/java/androidx/recyclerview/widget/RecyclerView.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+> Task :material:writeReleaseAarMetadata
+> Task :picasso3:writeReleaseAarMetadata
+> Task :preference:writeReleaseAarMetadata
+> Task :app_fenrir:mapFenrirReleaseSourceSetPaths
+> Task :app_fenrir:compileFenrirReleaseNavigationResources
+> Task :recyclerview:bundleLibCompileToJarRelease
+> Task :material:compileReleaseKotlin NO-SOURCE
+> Task :picasso3:compileReleaseKotlin
+> Task :picasso3:compileReleaseJavaWithJavac
+> Task :picasso3:mergeReleaseGeneratedProguardFiles
+> Task :picasso3:exportReleaseConsumerProguardFiles
+> Task :recyclerview:mergeReleaseGeneratedProguardFiles
+> Task :recyclerview:exportReleaseConsumerProguardFiles
+> Task :picasso3:bundleLibCompileToJarRelease
+> Task :recyclerview:prepareReleaseArtProfile
+> Task :recyclerview:writeReleaseAarMetadata
+> Task :camera2:extractDeepLinksRelease
+> Task :camera2:processReleaseManifest
+> Task :fenrir_common:extractDeepLinksRelease
+> Task :camera2:kspReleaseKotlin
+> Task :fenrir_common:processReleaseManifest
+> Task :app_fenrir:mergeFenrirReleaseArtProfile
+> Task :app_fenrir:mergeFenrirReleaseResources
+> Task :firebase-installations:extractDeepLinksFenrirRelease
+> Task :firebase-installations:processFenrirReleaseManifest
+> Task :image:extractDeepLinksRelease
+> Task :image:processReleaseManifest
+> Task :picasso3:extractDeepLinksRelease
+> Task :picasso3:processReleaseManifest
+> Task :preference:extractDeepLinksRelease
+> Task :preference:processReleaseManifest
+> Task :app_fenrir:createFenrirReleaseCompatibleScreenManifests
+> Task :app_fenrir:extractDeepLinksFenrirRelease
+> Task :app_fenrir:checkFenrirReleaseAarMetadata
+> Task :recyclerview:extractDeepLinksRelease
+> Task :camera2:mapReleaseSourceSetPaths
+> Task :recyclerview:processReleaseManifest
+> Task :camera2:compileReleaseLibraryResources
+> Task :fenrir_common:mapReleaseSourceSetPaths
+> Task :firebase-installations:mapFenrirReleaseSourceSetPaths
+> Task :firebase-installations:compileFenrirReleaseLibraryResources
+> Task :image:mapReleaseSourceSetPaths
+> Task :fenrir_common:compileReleaseLibraryResources
+> Task :picasso3:mapReleaseSourceSetPaths
+> Task :picasso3:compileReleaseLibraryResources
+> Task :preference:mapReleaseSourceSetPaths
+> Task :image:compileReleaseLibraryResources
+> Task :recyclerview:mapReleaseSourceSetPaths
+> Task :preference:compileReleaseLibraryResources
+> Task :recyclerview:compileReleaseLibraryResources
+> Task :firebase-installations:bundleLibRuntimeToJarFenrirRelease
+> Task :picasso3:bundleLibRuntimeToJarRelease
+> Task :app_fenrir:extractProguardFiles
+> Task :recyclerview:bundleLibRuntimeToJarRelease
+> Task :picasso3:processReleaseJavaRes
+> Task :firebase-installations:processFenrirReleaseJavaRes
+> Task :app_fenrir:mergeFenrirReleaseStartupProfile
+> Task :app_fenrir:generateFenrirReleaseAssets UP-TO-DATE
+> Task :camera2:generateReleaseAssets UP-TO-DATE
+> Task :recyclerview:processReleaseJavaRes
+> Task :fenrir_common:generateReleaseAssets UP-TO-DATE
+> Task :camera2:mergeReleaseAssets
+> Task :firebase-installations:generateFenrirReleaseAssets UP-TO-DATE
+> Task :fenrir_common:mergeReleaseAssets
+> Task :image:generateReleaseAssets UP-TO-DATE
+> Task :image:mergeReleaseAssets
+> Task :picasso3:generateReleaseAssets UP-TO-DATE
+> Task :firebase-installations:mergeFenrirReleaseAssets
+> Task :preference:generateReleaseAssets UP-TO-DATE
+> Task :preference:mergeReleaseAssets
+> Task :recyclerview:generateReleaseAssets UP-TO-DATE
+> Task :picasso3:mergeReleaseAssets
+> Task :recyclerview:mergeReleaseAssets
+> Task :app_fenrir:extractFenrirReleaseVersionControlInfo
+> Task :app_fenrir:writeFenrirReleaseAppMetadata
+> Task :app_fenrir:writeFenrirReleaseSigningConfigVersions
+
+> Task :material:compileReleaseJavaWithJavac
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+Note: Some input files use unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
+
+> Task :material:mergeReleaseGeneratedProguardFiles
+> Task :material:exportReleaseConsumerProguardFiles
+> Task :material:extractDeepLinksRelease
+> Task :material:processReleaseManifest
+> Task :material:mapReleaseSourceSetPaths
+> Task :material:bundleLibCompileToJarRelease
+> Task :material:compileReleaseLibraryResources
+> Task :app_fenrir:processFenrirReleaseMainManifest
+> Task :fenrir_common:compileReleaseKotlin
+> Task :fenrir_common:compileReleaseJavaWithJavac
+> Task :fenrir_common:mergeReleaseGeneratedProguardFiles
+> Task :fenrir_common:exportReleaseConsumerProguardFiles
+> Task :fenrir_common:bundleLibCompileToJarRelease
+> Task :app_fenrir:processFenrirReleaseManifest
+> Task :app_fenrir:processFenrirReleaseManifestForPackage
+> Task :app_fenrir:processFenrirReleaseResources
+> Task :fenrir_common:bundleLibRuntimeToJarRelease
+> Task :material:bundleLibRuntimeToJarRelease
+> Task :fenrir_common:processReleaseJavaRes
+> Task :material:processReleaseJavaRes NO-SOURCE
+> Task :material:generateReleaseAssets UP-TO-DATE
+> Task :material:mergeReleaseAssets
+> Task :app_fenrir:mergeFenrirReleaseAssets
+> Task :app_fenrir:compressFenrirReleaseAssets
+> Task :preference:compileReleaseKotlin
+> Task :preference:compileReleaseJavaWithJavac NO-SOURCE
+> Task :preference:mergeReleaseGeneratedProguardFiles
+> Task :preference:exportReleaseConsumerProguardFiles
+> Task :preference:bundleLibCompileToJarRelease
+> Task :preference:bundleLibRuntimeToJarRelease
+> Task :preference:processReleaseJavaRes
+> Task :image:compileReleaseKotlin
+> Task :image:compileReleaseJavaWithJavac NO-SOURCE
+> Task :image:mergeReleaseGeneratedProguardFiles
+> Task :image:exportReleaseConsumerProguardFiles
+> Task :image:bundleLibCompileToJarRelease
+> Task :image:bundleLibRuntimeToJarRelease
+> Task :image:processReleaseJavaRes
+
+> Task :camera2:compileReleaseKotlin
+Problem found: Kotlin compiler warning (id: kotlin:compiler:warning:compiler-warning)
+  Kotlin compiler warning
+    ATTENTION!
+    This build uses unsafe internal compiler arguments:
+
+    -XXLanguage:+PropertyParamAnnotationDefaultTargetMode
+
+    This mode is not recommended for production use,
+    as no stability/compatibility guarantees are given on
+    compiler or generated code. Use it at your own risk!
+
+> Task :camera2:compileReleaseJavaWithJavac
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+> Task :camera2:mergeReleaseGeneratedProguardFiles
+> Task :camera2:exportReleaseConsumerProguardFiles
+> Task :camera2:processReleaseJavaRes
+> Task :camera2:bundleLibCompileToJarRelease
+> Task :camera2:bundleLibRuntimeToJarRelease
+> Task :app_fenrir:compileFenrirReleaseKotlin
+> Task :app_fenrir:compileFenrirReleaseJavaWithJavac
+> Task :app_fenrir:mergeFenrirReleaseGeneratedProguardFiles
+> Task :app_fenrir:processFenrirReleaseJavaRes
+> Task :app_fenrir:expandFenrirReleaseArtProfileWildcards
+> Task :app_fenrir:mergeFenrirReleaseJavaResource
+> Task :app_fenrir:minifyFenrirReleaseWithR8
+> Task :app_fenrir:compileFenrirReleaseArtProfile
+> Task :app_fenrir:convertShrunkResourcesToBinaryFenrirRelease
+> Task :app_fenrir:optimizeFenrirReleaseResources
+> Task :app_fenrir:packageFenrirRelease
+> Task :app_fenrir:createFenrirReleaseApkListingFileRedirect
+> Task :app_fenrir:assembleFenrirRelease
+
+[Incubating] Problems report is available at: file:///home/runner/work/Fenrir-for-VK/Fenrir-for-VK/build/reports/problems/problems-report.html
+
+BUILD SUCCESSFUL in 5m 40s
+220 actionable tasks: 220 executed
+
+==================== Collect release APK ====================
+app_fenrir/build/outputs/apk/fenrir/release/app_fenrir-fenrir-release-unsigned.apk
+R8 mapping.txt saved to ci-out
+
+==================== Sign release APK (zipalign + apksigner) ====================
+
+==================== APK diagnostics (sdk + signature) ====================
+package: name='dev.ragnarok.fenrir' versionCode='1000' versionName='121' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'
+minSdkVersion:'26'
+targetSdkVersion:'36'
+uses-permission: name='android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='29'
+native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v3.2 scheme (APK Signature Scheme v3.2): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Number of signers: 1
+Signed release APK published to 'ci-debug': Fenrir-release-signed.apk
+
+==================== CI end status=0 Mon Oct 12 23:44:55 UTC 2026 ====================
