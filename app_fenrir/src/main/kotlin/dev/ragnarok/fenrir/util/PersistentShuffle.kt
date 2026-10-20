@@ -33,11 +33,12 @@ import kotlin.random.Random
  * в SharedPreferences через apply() — колбэк плеера markPlayed НЕ блокирует диск (в отличие
  * от прежнего синхронного commit на каждый трек) и не перечитывает CSV. Число источников
  * ограничено MRU-списком (MAX_SOURCES); самые старые вычищаются вместе со своими ключами.
- * Единственный критерий завершения прохода — состав (в buildOrder); отдельного счётчика
- * (total) больше нет.
+ * Критерий завершения прохода — состав (buildOrder/isPassComplete); отдельного счётчика
+ * (total) нет. При перестроении история стоит ДО текущего трека, непрослушанное — ПОСЛЕ.
  */
 object PersistentShuffle {
     private const val PREF_PLAYED_PREFIX = "ci_shuffle_played_"
+    private const val PREF_PLAYED_V2_PREFIX = "ci_shuffle_played_v2_"
     private const val PREF_MAX_PREFIX = "ci_shuffle_max_"
 
     // MRU-список известных источников (свежий — первым) и его лимит.
@@ -57,7 +58,7 @@ object PersistentShuffle {
 
     // Ключ трека. Для локальных файлов id = url.hashCode() (32-бит, возможны коллизии),
     // поэтому для них ключом берём стабильный file-url; для VK — стабильную пару id_ownerId.
-    private fun keyOf(a: Audio): String =
+    fun keyOf(a: Audio): String =
         if (a.isLocal && !a.url.isNullOrEmpty()) "u:${a.url}" else "${a.id}_${a.ownerId}"
 
     private fun parseSet(s: String?): MutableSet<String> {
@@ -66,8 +67,6 @@ object PersistentShuffle {
         }
         return HashSet(s.split(",").filter { it.isNotEmpty() })
     }
-
-    private fun joinSet(set: Set<String>): String = set.joinToString(",")
 
     private fun parseSources(s: String?): MutableList<String> {
         if (s.isNullOrEmpty()) {
@@ -90,10 +89,11 @@ object PersistentShuffle {
     // Ленивая гидратация набора прослушанного по источнику (грузим только реально нужные).
     private fun playedFor(context: Context, sourceId: String): MutableSet<String> =
         playedMem.getOrPut(sourceId) {
-            parseSet(
-                PreferenceScreen.getPreferences(context)
-                    .getString(PREF_PLAYED_PREFIX + sourceId, null)
-            )
+            val prefs = PreferenceScreen.getPreferences(context)
+            // Copy: SharedPreferences owns the returned set. Legacy CSV could split file URLs
+            // containing commas; StringSet preserves each key verbatim from now on.
+            prefs.getStringSet(PREF_PLAYED_V2_PREFIX + sourceId, null)?.toMutableSet()
+                ?: parseSet(prefs.getString(PREF_PLAYED_PREFIX + sourceId, null))
         }
 
     private fun maxFor(context: Context, sourceId: String): Int =
@@ -122,11 +122,13 @@ object PersistentShuffle {
             }
         }
         PreferenceScreen.getPreferences(context).edit {
-            putString(PREF_PLAYED_PREFIX + sourceId, joinSet(played))
+            putStringSet(PREF_PLAYED_V2_PREFIX + sourceId, HashSet(played))
+            remove(PREF_PLAYED_PREFIX + sourceId)
             putInt(PREF_MAX_PREFIX + sourceId, mx)
             putString(PREF_SOURCES, sources.joinToString(SOURCES_SEP))
             for (e in evicted) {
                 remove(PREF_PLAYED_PREFIX + e)
+                remove(PREF_PLAYED_V2_PREFIX + e)
                 remove(PREF_MAX_PREFIX + e)
             }
         }
@@ -154,17 +156,18 @@ object PersistentShuffle {
      *
      * sourceId == null → эфемерная очередь: обычный равномерный шафл, состояние не трогаем.
      * sourceId != null → персистентный проход источника: сначала (в случайном порядке) ещё
-     * не прозвучавшие в текущем проходе треки, затем — уже прозвучавшие. Прун мёртвых ключей
+     * не прозвучавшие в текущем проходе треки, затем — уже прозвучавшие без anchorIndex.
+     * С anchorIndex история ставится перед текущим, оставшиеся — после. Прун мёртвых ключей
      * и старт нового прохода происходят ТОЛЬКО когда список полный (n >= maxSeen), чтобы
      * неполная догрузка не сбрасывала прогресс.
      */
-    fun buildOrder(context: Context, sourceId: String?, audios: List<Audio>): IntArray {
+    fun buildOrder(context: Context, sourceId: String?, audios: List<Audio>, anchorIndex: Int = -1): IntArray {
         val n = audios.size
         if (n <= 0) {
             return IntArray(0)
         }
         if (sourceId.isNullOrEmpty()) {
-            return plainOrder(n)
+            return anchor(plainOrder(n), emptySet(), anchorIndex)
         }
         synchronized(lock) {
             ensureSourcesLoaded(context)
@@ -187,6 +190,8 @@ object PersistentShuffle {
                 }
             }
 
+            val playedBefore = played.size
+            var reset = false
             var changed = false
             // Безопасный прун: только на полном списке — отсутствующие ключи это реально
             // удалённые треки, а не «ещё не догруженные».
@@ -196,6 +201,7 @@ object PersistentShuffle {
             // Новый проход — только на полном списке (иначе прослушанный префикс ложно
             // обнулял бы прогресс ещё грузящегося источника).
             if (full && unplayedIdx.isEmpty()) {
+                reset = true
                 if (played.isNotEmpty()) {
                     played.clear()
                     changed = true
@@ -228,7 +234,29 @@ object PersistentShuffle {
             for (i in playedIdx) {
                 order[p++] = i
             }
-            return order
+            val result = anchor(order, playedIdx.toSet(), anchorIndex)
+            PlaybackTrace.event(context, "shuffle_build", "source" to PlaybackTrace.token(sourceId),
+                "size" to n, "unique" to audios.map(::keyOf).toSet().size,
+                "playedBefore" to playedBefore, "playedNow" to played.size,
+                "unplayed" to unplayedIdx.size, "maxSeen" to curMax, "assumedFull" to full,
+                "reset" to reset, "anchor" to anchorIndex)
+            return result
+        }
+    }
+
+    // Already played BEFORE current, all remaining AFTER current. Merely swapping current
+    // with position zero puts one already-played item among the unplayed suffix.
+    internal fun anchor(order: IntArray, played: Set<Int>, current: Int): IntArray {
+        if (current !in order.indices) return order
+        return (order.filter { it != current && it in played } + current +
+            order.filter { it != current && it !in played }).toIntArray()
+    }
+
+    fun isPassComplete(context: Context, sourceId: String?, audios: List<Audio>): Boolean {
+        if (sourceId.isNullOrEmpty() || audios.isEmpty()) return false
+        synchronized(lock) {
+            val played = playedFor(context, sourceId)
+            return audios.size >= maxFor(context, sourceId) && audios.all { keyOf(it) in played }
         }
     }
 
@@ -244,7 +272,10 @@ object PersistentShuffle {
         synchronized(lock) {
             ensureSourcesLoaded(context)
             val played = playedFor(context, sourceId)
-            if (played.add(keyOf(audio))) {
+            val added = played.add(keyOf(audio))
+            PlaybackTrace.event(context, "shuffle_mark", "source" to PlaybackTrace.token(sourceId),
+                "track" to PlaybackTrace.audio(audio), "added" to added, "played" to played.size)
+            if (added) {
                 touchSource(sourceId)
                 persist(context, sourceId)
             }

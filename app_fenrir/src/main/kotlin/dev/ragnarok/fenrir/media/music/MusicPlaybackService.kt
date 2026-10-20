@@ -9,6 +9,7 @@ import android.media.audiofx.AudioEffect
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Handler
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.camera.camera2.adapter.future
@@ -34,6 +35,9 @@ import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE
 import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
 import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -75,6 +79,7 @@ import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
 import dev.ragnarok.fenrir.util.Logger
 import dev.ragnarok.fenrir.util.MissingTrackNotifier
 import dev.ragnarok.fenrir.util.PersistentShuffle
+import dev.ragnarok.fenrir.util.PlaybackTrace
 import dev.ragnarok.fenrir.util.TransparentCacheWorker
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils
@@ -596,7 +601,7 @@ class MusicPlaybackService : MediaSessionService() {
                     changed = true
                 }
                 currentQueueId = queueId
-                musicPlayer.setSources(audios)
+                musicPlayer.setSources(audios, position)
                 musicPlayer.playAt(position)
                 if (musicPlayer.shuffleMode != shuffleMode) {
                     musicPlayer.shuffleMode = shuffleMode
@@ -724,7 +729,22 @@ class MusicPlaybackService : MediaSessionService() {
                 Utils.firstNonEmptyString(
                     res,
                     "file:///android_asset/audio_error.ogg"
-                )
+                ) ?: "file:///android_asset/audio_error.ogg"
+            }
+            val localFile = if (url.startsWith("file://")) url.toUri().path?.let(::File) else null
+            mService.get()?.let { ctx ->
+                PlaybackTrace.event(ctx, "media_source", "track" to PlaybackTrace.audio(audio),
+                    "recording" to PlaybackTrace.recording(audio),
+                    "kind" to when {
+                        url.contains("audio_error.ogg") -> "unavailable_asset"
+                        RestoredUrlRefresher.isPlaceholder(url) -> "restore_placeholder"
+                        url.startsWith("file://") -> "file"
+                        url.startsWith("content://") -> "content"
+                        url.contains("index.m3u8") -> "hls"
+                        else -> "network"
+                    }, "uriToken" to PlaybackTrace.token(url),
+                    "fileBytes" to localFile?.length(), "fileExists" to localFile?.isFile,
+                    "expectedMs" to audio.duration.toLong() * 1000)
             }
             return MediaItem.Builder().setUri(url).setMediaId("${audio.id}_${audio.ownerId}")
                     .setTag(audio)
@@ -832,7 +852,7 @@ class MusicPlaybackService : MediaSessionService() {
             )
         }
 
-        fun setSources(audios: List<Audio>) {
+        fun setSources(audios: List<Audio>, startIndex: Int = 0) {
             // FENRIR-CI: новая очередь из приложения — свежие ссылки, восстановление не нужно.
             RestoredUrlRefresher.clear()
             pendingRestoreShuffle = false
@@ -844,7 +864,8 @@ class MusicPlaybackService : MediaSessionService() {
             for (i in audios) {
                 sources.add(makeMediaSource(i))
             }
-            exoplayer.setMediaSources(sources)
+            trace("set_sources", "size" to audios.size, "startIndex" to startIndex)
+            exoplayer.setMediaSources(sources, startIndex.coerceIn(0, (audios.size - 1).coerceAtLeast(0)), 0L)
             // FENRIR-CI: если шафл уже включён — переустанавливаем перестановку так, чтобы
             // ещё не прозвучавшие в текущем проходе треки шли первыми (см. PersistentShuffle).
             if (exoplayer.shuffleModeEnabled) {
@@ -862,20 +883,31 @@ class MusicPlaybackService : MediaSessionService() {
             val ctx = mService.get() ?: return
             val q = currentQueue
             if (q.isEmpty() || exoplayer.mediaItemCount != q.size) {
+                trace("shuffle_build_skipped", "queueSize" to q.size)
                 return
             }
-            val order = PersistentShuffle.buildOrder(ctx, ctx.currentQueueId, q)
+            val order = PersistentShuffle.buildOrder(ctx, ctx.currentQueueId, q, exoplayer.currentMediaItemIndex)
             if (order.size == exoplayer.mediaItemCount) {
                 exoplayer.setShuffleOrder(MusicShuffleOrder(order, System.nanoTime()))
+                PersistentShuffle.markPlayed(ctx, ctx.currentQueueId, currentAudio)
+                val build = ++orderGeneration
+                order.toList().chunked(80).forEachIndexed { chunk, indexes ->
+                    PlaybackTrace.event(ctx, "shuffle_order", "generation" to build,
+                        "source" to PlaybackTrace.token(ctx.currentQueueId), "chunk" to chunk,
+                        "entries" to indexes.joinToString(",") { "$it:${PlaybackTrace.audio(q[it])}:${PlaybackTrace.recording(q[it])}" })
+                }
             }
         }
 
         fun insertSourceAfterCurrent(audio: Audio) {
-            exoplayer.addMediaSource(exoplayer.currentMediaItemIndex + 1, makeMediaSource(audio))
+            val at = exoplayer.currentMediaItemIndex + 1
+            currentQueue = ArrayList(currentAudiosInMediaOrder()).apply { add(at, audio) }
+            trace("insert", "at" to at, "track" to PlaybackTrace.audio(audio))
+            exoplayer.addMediaSource(at, makeMediaSource(audio))
         }
 
         // FENRIR-CI: дозапись новых треков в КОНЕЦ текущей очереди с дедупликацией
-        // (по url, а для треков без url — по "id_ownerId"). Обновляет currentQueue,
+        // (по стабильному ключу PersistentShuffle, независимо от смены VK URL). Обновляет currentQueue,
         // добавляет медиаисточники в exoplayer и, если включён шафл, пересобирает
         // персистентный шафл-порядок по всей расширенной очереди. Возвращает true,
         // если что-то реально добавлено.
@@ -885,12 +917,12 @@ class MusicPlaybackService : MediaSessionService() {
             }
             val existing = HashSet<String>(currentQueue.size)
             for (a in currentQueue) {
-                existing.add(if (!a.url.isNullOrEmpty()) a.url!! else "${a.id}_${a.ownerId}")
+                existing.add(PersistentShuffle.keyOf(a))
             }
             val toAdd = ArrayList<Audio>()
             val newSources = ArrayList<MediaSource>()
             for (a in newAudios) {
-                val key = if (!a.url.isNullOrEmpty()) a.url!! else "${a.id}_${a.ownerId}"
+                val key = PersistentShuffle.keyOf(a)
                 if (existing.add(key)) {
                     toAdd.add(a)
                     newSources.add(makeMediaSource(a))
@@ -899,6 +931,7 @@ class MusicPlaybackService : MediaSessionService() {
             if (toAdd.isEmpty()) {
                 return false
             }
+            trace("append", "requested" to newAudios.size, "added" to toAdd.size)
             currentQueue = ArrayList(currentQueue).apply { addAll(toAdd) }
             exoplayer.addMediaSources(newSources)
             if (exoplayer.shuffleModeEnabled) {
@@ -914,14 +947,17 @@ class MusicPlaybackService : MediaSessionService() {
         }
 
         fun prev() {
+            trace("command_previous")
             exoplayer.seekToPrevious()
         }
 
         fun next() {
+            trace("command_next")
             exoplayer.seekToNext()
         }
 
         fun playAt(position: Int) {
+            trace("command_play_at", "target" to position)
             exoplayer.seekTo(position, 0)
             exoplayer.play()
         }
@@ -934,6 +970,8 @@ class MusicPlaybackService : MediaSessionService() {
         }
 
         fun release() {
+            trace("release")
+            traceHandler.removeCallbacks(heartbeat)
             stop()
             exoplayer.clearMediaItems()
             exoplayer.release()
@@ -954,6 +992,7 @@ class MusicPlaybackService : MediaSessionService() {
             get() = if (exoplayer.currentPosition == C.TIME_UNSET) -1 else exoplayer.currentPosition
 
         fun seek(whereto: Long): Long {
+            trace("command_seek", "targetMs" to whereto)
             exoplayer.seekTo(whereto)
             return whereto
         }
@@ -1028,6 +1067,7 @@ class MusicPlaybackService : MediaSessionService() {
                     // FENRIR-CI: включаем шафл по всей очереди с учётом уже прозвучавших треков.
                     applyPersistentShuffleOrder()
                 }
+                trace("shuffle_mode", "enabled" to shuffleMode)
                 exoplayer.shuffleModeEnabled = shuffleMode
             }
 
@@ -1037,6 +1077,43 @@ class MusicPlaybackService : MediaSessionService() {
                 exoplayer.repeatMode = repeatMode
             }
 
+        private val tracePlayerId = java.util.UUID.randomUUID().toString()
+        private var orderGeneration = 0L
+        private var twoThirdsLogged = false
+        private val traceHandler = Handler(exoplayer.applicationLooper)
+        private val heartbeat = object : Runnable {
+            override fun run() {
+                if (!exoplayer.isPlaying) return
+                trace("heartbeat")
+                val duration = exoplayer.duration
+                if (!twoThirdsLogged && duration > 0 && exoplayer.currentPosition >= duration * 2 / 3) {
+                    twoThirdsLogged = true
+                    trace("two_thirds") // Observation only; never changes playback.
+                }
+                traceHandler.postDelayed(this, 15_000)
+            }
+        }
+
+        private fun currentAudiosInMediaOrder(): List<Audio> =
+            (0 until exoplayer.mediaItemCount).mapNotNull {
+                exoplayer.getMediaItemAt(it).localConfiguration?.tag as? Audio
+            }
+
+        private fun trace(event: String, vararg fields: Pair<String, Any?>) {
+            val ctx = mService.get() ?: return
+            PlaybackTrace.event(ctx, event,
+                "player" to tracePlayerId,
+                "source" to PlaybackTrace.token(ctx.currentQueueId),
+                "recording" to PlaybackTrace.recording(currentAudio),
+                "track" to PlaybackTrace.audio(currentAudio), "index" to exoplayer.currentMediaItemIndex,
+                "size" to exoplayer.mediaItemCount, "orderGeneration" to orderGeneration,
+                "positionMs" to exoplayer.currentPosition, "durationMs" to exoplayer.duration,
+                "expectedMs" to (currentAudio?.duration?.toLong()?.times(1000)),
+                "bufferedMs" to exoplayer.bufferedPosition, "state" to exoplayer.playbackState,
+                "shuffle" to exoplayer.shuffleModeEnabled, "repeat" to exoplayer.repeatMode,
+                "errors" to errorsCount, *fields)
+        }
+
         init {
             exoplayer.setHandleAudioBecomingNoisy(true)
             exoplayer.setWakeMode(C.WAKE_MODE_NETWORK)
@@ -1044,8 +1121,26 @@ class MusicPlaybackService : MediaSessionService() {
             exoplayer.repeatMode = Player.REPEAT_MODE_OFF
             exoplayer.shuffleOrder = MusicShuffleOrder(0)
 
+            trace("player_created")
+            exoplayer.addAnalyticsListener(object : AnalyticsListener {
+                override fun onLoadError(
+                    eventTime: AnalyticsListener.EventTime,
+                    loadEventInfo: LoadEventInfo,
+                    mediaLoadData: MediaLoadData,
+                    error: IOException,
+                    wasCanceled: Boolean
+                ) {
+                    // Analytics callback is on player application looper. No URI/query strings.
+                    trace("load_error", "error" to error.javaClass.simpleName,
+                        "httpCode" to (error as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode,
+                        "bytes" to loadEventInfo.bytesLoaded, "loadMs" to loadEventInfo.loadDurationMs,
+                        "dataType" to mediaLoadData.dataType, "scheme" to loadEventInfo.uri.scheme,
+                        "canceled" to wasCanceled, "window" to eventTime.windowIndex)
+                }
+            })
             exoplayer.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(@Player.State state: Int) {
+                    trace("playback_state", "state" to state)
                     when (state) {
                         Player.STATE_READY -> if (isPreparing) {
                             isPreparing = false
@@ -1066,8 +1161,12 @@ class MusicPlaybackService : MediaSessionService() {
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     super.onIsPlayingChanged(isPlaying)
-                    if (isPlaying && hasErrorPlayback) {
+                    trace("is_playing", "playing" to isPlaying)
+                    traceHandler.removeCallbacks(heartbeat)
+                    if (isPlaying) {
+                        errorsCount = 0
                         hasErrorPlayback = false
+                        traceHandler.postDelayed(heartbeat, 15_000)
                     }
                     if (!isPlaying) {
                         mService.get()?.saveResumeState()
@@ -1081,6 +1180,7 @@ class MusicPlaybackService : MediaSessionService() {
                     playWhenReady: Boolean,
                     @Player.PlayWhenReadyChangeReason reason: Int
                 ) {
+                    trace("play_when_ready", "ready" to playWhenReady, "reason" to reason)
                     if (isPlaying != playWhenReady) {
                         isPlaying = playWhenReady
                         mService.get()?.notifyChange(PLAY_STATE_CHANGED)
@@ -1092,6 +1192,15 @@ class MusicPlaybackService : MediaSessionService() {
                     @MediaItemTransitionReason reason: Int
                 ) {
                     super.onMediaItemTransition(mediaItem, reason)
+                    trace("transition", "reason" to reason)
+                    twoThirdsLogged = false
+                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && exoplayer.shuffleModeEnabled) {
+                        val ctx = mService.get()
+                        if (ctx != null && PersistentShuffle.isPassComplete(ctx, ctx.currentQueueId, currentQueue)) {
+                            trace("pass_boundary")
+                            applyPersistentShuffleOrder()
+                        }
+                    }
                     if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK
                         || reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
                         || reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED
@@ -1162,25 +1271,10 @@ class MusicPlaybackService : MediaSessionService() {
 
                 override fun onEvents(player: Player, events: Player.Events) {
                     super.onEvents(player, events)
-                    if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED) || events.contains(
+                    if ((events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED) || events.contains(
                             Player.EVENT_REPEAT_MODE_CHANGED
-                        )
-                        && !events.contains(Player.EVENT_TIMELINE_CHANGED)
+                        )) && !events.contains(Player.EVENT_TIMELINE_CHANGED)
                     ) {
-                        if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) {
-                            if (player.shuffleModeEnabled) {
-                                val s = getShuffleOrderIndexes()
-                                for (i in s.indices) {
-                                    if (s[i] == itemIndex) {
-                                        if (i > 0) {
-                                            exoplayer.shuffleOrder =
-                                                exoplayer.shuffleOrder.cloneAndMove(i, i, 0)
-                                        }
-                                        break
-                                    }
-                                }
-                            }
-                        }
                         mService.get()?.refreshMediaButtonCustomLayout()
                     } else if (events.contains(Player.EVENT_TRACKS_CHANGED)
                         && !events.contains(Player.EVENT_TIMELINE_CHANGED)
@@ -1201,6 +1295,7 @@ class MusicPlaybackService : MediaSessionService() {
                     timeline: Timeline,
                     @Player.TimelineChangeReason reason: Int
                 ) {
+                    trace("timeline", "reason" to reason, "windows" to timeline.windowCount)
                     if (reason != Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
                         return
                     }
@@ -1217,8 +1312,25 @@ class MusicPlaybackService : MediaSessionService() {
                     service.saveResumeQueue()
                 }
 
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int
+                ) {
+                    val oldAudio = oldPosition.mediaItem?.localConfiguration?.tag as? Audio
+                    trace("discontinuity", "reason" to reason,
+                        "oldIndex" to oldPosition.mediaItemIndex,
+                        "oldTrack" to PlaybackTrace.audio(oldAudio), "oldMs" to oldPosition.positionMs,
+                        "oldExpectedMs" to (oldAudio?.duration?.toLong()?.times(1000)),
+                        "newIndex" to newPosition.mediaItemIndex, "newMs" to newPosition.positionMs)
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
+                    trace("player_error", "code" to error.errorCode, "name" to error.errorCodeName,
+                        "causes" to generateSequence<Throwable>(error) { it.cause }.take(8)
+                            .joinToString(",") { it.javaClass.simpleName })
                     if (tryRebuildRestoredItem()) {
+                        trace("error_rebuild_restored")
                         return
                     }
                     mService.get()?.let {
@@ -1226,25 +1338,29 @@ class MusicPlaybackService : MediaSessionService() {
                         if (errorsCount > 4) {
                             errorsCount = 0
                             if (hasErrorPlayback) {
+                                trace("error_stop_service")
                                 it.stopPlaybackService()
                             } else if (exoplayer.hasNextMediaItem()) {
                                 hasErrorPlayback = true
-                                val pos = exoplayer.currentMediaItemIndex
+                                val next = exoplayer.nextMediaItemIndex
+                                trace("error_skip", "target" to next)
                                 exoplayer.stop()
                                 exoplayer.prepare()
                                 exoplayer.seekTo(
-                                    pos + 1,
+                                    next,
                                     0
                                 )
                                 exoplayer.play()
+                            } else {
+                                trace("error_no_next")
                             }
                         } else {
+                            val index = exoplayer.currentMediaItemIndex
+                            val position = exoplayer.currentPosition
+                            trace("error_retry", "attempt" to errorsCount, "targetMs" to position)
                             exoplayer.stop()
                             exoplayer.prepare()
-                            exoplayer.seekTo(
-                                exoplayer.currentMediaItemIndex,
-                                exoplayer.currentPosition
-                            )
+                            exoplayer.seekTo(index, position)
                             exoplayer.play()
                         }
                     }
@@ -1289,7 +1405,7 @@ class MusicPlaybackService : MediaSessionService() {
     internal fun open(list: List<Audio>, position: Int) {
         synchronized(this) {
             currentQueueId = null // FENRIR-CI: произвольный список — не помечаем как «Моя музыка»
-            musicPlayer.setSources(list)
+            musicPlayer.setSources(list, position)
             notifyChange(QUEUE_CHANGED)
             musicPlayer.playAt(position)
         }
@@ -1557,14 +1673,18 @@ class MusicPlaybackService : MediaSessionService() {
             indexToExclusive: Int,
             newIndexFrom: Int
         ): ShuffleOrder {
-            val newShuffled = IntArray(shuffled.size)
-            for (i in shuffled.indices) {
-                newShuffled[i] = shuffled[i]
-            }
-            val tmp = newShuffled[indexFrom]
-            newShuffled[indexFrom] = newShuffled[newIndexFrom]
-            newShuffled[newIndexFrom] = tmp
-            return MusicShuffleOrder(newShuffled, random)
+            require(indexFrom in 0..shuffled.size && indexToExclusive in indexFrom..shuffled.size)
+            val count = indexToExclusive - indexFrom
+            require(newIndexFrom in 0..shuffled.size - count)
+            val newShuffled = shuffled.map { index ->
+                if (index in indexFrom until indexToExclusive) {
+                    newIndexFrom + index - indexFrom
+                } else {
+                    val removed = if (index >= indexToExclusive) index - count else index
+                    if (removed >= newIndexFrom) removed + count else removed
+                }
+            }.toIntArray()
+            return MusicShuffleOrder(newShuffled, Random(random.nextLong()))
         }
 
         override fun cloneAndClear(): ShuffleOrder {

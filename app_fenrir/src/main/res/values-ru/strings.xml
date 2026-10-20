@@ -1742,4 +1742,6 @@
     <string name="retry">Повторить</string>
     <string name="video_play_with_external_player">Играть в стороннем плеере</string>
     <string name="audios_tab_my_music">Моя музыка+оффлайн</string>
+    <string name="share_playback_debug">Отправить диагностику плеера</string>
+    <string name="playback_debug_export_failed">Не удалось экспортировать диагностику плеера</string>
 </resources>

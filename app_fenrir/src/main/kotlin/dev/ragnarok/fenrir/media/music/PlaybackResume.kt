@@ -5,6 +5,15 @@ import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.AtomicFile
+import dev.ragnarok.fenrir.util.PlaybackTrace
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import androidx.core.content.edit
 import dev.ragnarok.fenrir.domain.IAudioInteractor
 import dev.ragnarok.fenrir.domain.InteractorFactory
@@ -69,25 +78,41 @@ internal object PlaybackResumeStore {
         val app = context.applicationContext
         val copy = ArrayList(audios)
         val generation = ++queueGeneration
+        PlaybackTrace.event(app, "resume_save_requested", "generation" to generation,
+            "source" to PlaybackTrace.token(queueId), "size" to copy.size)
         io.execute {
             if (generation != queueGeneration) {
+                PlaybackTrace.event(app, "resume_save_coalesced", "generation" to generation)
                 return@execute
             }
             try {
-                val json = kJson.encodeToString(queueSerializer, copy)
-                val target = queueFile(app)
-                val tmp = File(app.filesDir, "$QUEUE_FILE.tmp")
-                tmp.writeText(json)
-                if (!tmp.renameTo(target)) {
-                    target.delete()
-                    tmp.renameTo(target)
+                // Queue identity and contents are ONE atomic payload, not a file/prefs pair
+                // which can describe different queues after a crash between writes.
+                val json = buildJsonObject {
+                    put("version", JsonPrimitive(1))
+                    put("queueId", queueId?.let(::JsonPrimitive) ?: JsonNull)
+                    put("audios", kJson.encodeToJsonElement(queueSerializer, copy))
+                }.toString()
+                if (generation != queueGeneration) return@execute
+                val target = AtomicFile(queueFile(app))
+                val stream = target.startWrite()
+                try {
+                    stream.write(json.toByteArray(Charsets.UTF_8))
+                    target.finishWrite(stream)
+                } catch (e: Throwable) {
+                    target.failWrite(stream)
+                    throw e
                 }
                 prefs(app).edit {
                     putBoolean(KEY_HAS_QUEUE, true)
-                    putString(KEY_QUEUE_ID, queueId)
+                    putString(KEY_QUEUE_ID, queueId) // legacy readers only
                 }
+                PlaybackTrace.event(app, "resume_save_done", "generation" to generation,
+                    "source" to PlaybackTrace.token(queueId), "size" to copy.size)
             } catch (e: Throwable) {
-                Log.e(TAG, "saveQueue failed: ${e.message}")
+                PlaybackTrace.event(app, "resume_save_failed", "generation" to generation,
+                    "error" to e.javaClass.simpleName)
+                Log.e(TAG, "saveQueue failed: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -97,6 +122,8 @@ internal object PlaybackResumeStore {
         if (index < 0 || audio == null) {
             return
         }
+        PlaybackTrace.event(context, "resume_state", "index" to index,
+            "positionMs" to positionMs, "track" to PlaybackTrace.audio(audio))
         prefs(context.applicationContext).edit {
             putInt(KEY_INDEX, index)
             putLong(KEY_POSITION, positionMs.coerceAtLeast(0))
@@ -111,7 +138,8 @@ internal object PlaybackResumeStore {
             val snapshot = try {
                 load(app)
             } catch (e: Throwable) {
-                Log.e(TAG, "load failed: ${e.message}")
+                PlaybackTrace.event(app, "resume_load_failed", "error" to e.javaClass.simpleName)
+                Log.e(TAG, "load failed: ${e.javaClass.simpleName}")
                 null
             }
             mainHandler.post { callback(snapshot) }
@@ -124,27 +152,42 @@ internal object PlaybackResumeStore {
             return null
         }
         val file = queueFile(context)
-        if (!file.exists()) {
+        if (!file.exists() && !File(file.path + ".bak").exists()) {
             return null
         }
-        val audios = kJson.decodeFromString(queueSerializer, file.readText())
+        val payload = AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use {
+            kJson.parseToJsonElement(it.readText())
+        }
+        val legacy = payload is JsonArray
+        val audios = kJson.decodeFromJsonElement(queueSerializer,
+            if (legacy) payload else payload.jsonObject.getValue("audios"))
+        val queueId = if (legacy) p.getString(KEY_QUEUE_ID, null)
+            else payload.jsonObject["queueId"]?.jsonPrimitive?.contentOrNull
         if (audios.isEmpty()) {
             return null
         }
         var index = p.getInt(KEY_INDEX, 0)
         var position = p.getLong(KEY_POSITION, 0)
+        val savedIndex = index
+        var recovery = "exact"
         val audioKey = p.getString(KEY_AUDIO_KEY, null)
         // Индекс пишется синхронно, а очередь — в фоне: сверяемся по ключу трека.
         if (index !in audios.indices || (audioKey != null && key(audios[index]) != audioKey)) {
             val found = if (audioKey != null) audios.indexOfFirst { key(it) == audioKey } else -1
             if (found >= 0) {
+                recovery = "found_by_key"
                 index = found
             } else {
+                recovery = "missing_track_reset"
                 index = 0
                 position = 0
             }
         }
-        return Snapshot(audios, index, position.coerceAtLeast(0), p.getString(KEY_QUEUE_ID, null))
+        PlaybackTrace.event(context, "resume_loaded", "legacy" to legacy,
+            "source" to PlaybackTrace.token(queueId), "size" to audios.size,
+            "savedIndex" to savedIndex, "index" to index, "positionMs" to position,
+            "track" to PlaybackTrace.audio(audios[index]), "recovery" to recovery)
+        return Snapshot(audios, index, position.coerceAtLeast(0), queueId)
     }
 }
 

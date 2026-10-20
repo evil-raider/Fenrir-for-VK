@@ -7,4 +7,8 @@
         android:title="@string/delete"
         app:iconTint="?colorOnSurface"
         app:showAsAction="always" />
+    <item
+        android:id="@+id/share_playback_debug"
+        android:title="@string/share_playback_debug"
+        app:showAsAction="never" />
 </menu>

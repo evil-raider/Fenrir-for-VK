@@ -1997,4 +1997,6 @@
     <string name="retry">Retry</string>
     <string name="video_play_with_external_player">Play in third-party player</string>
     <string name="audios_tab_my_music">My music+offline</string>
+    <string name="share_playback_debug">Share player diagnostics</string>
+    <string name="playback_debug_export_failed">Could not export player diagnostics</string>
 </resources>

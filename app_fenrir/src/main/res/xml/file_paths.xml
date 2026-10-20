@@ -4,6 +4,9 @@
         name="Captured"
         path="DCIM/Fenrir" />
     <cache-path
+        name="playback-debug"
+        path="playback-debug" />
+    <cache-path
         name="notif-cache"
         path="notif-cache" />
     <external-path

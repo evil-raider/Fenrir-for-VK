@@ -27,6 +27,8 @@ import dev.ragnarok.fenrir.listener.OnSectionResumeCallback
 import dev.ragnarok.fenrir.model.LogEventType
 import dev.ragnarok.fenrir.model.LogEventWrapper
 import dev.ragnarok.fenrir.util.Utils.shareLink
+import dev.ragnarok.fenrir.util.Utils.shareExternal
+import dev.ragnarok.fenrir.util.PlaybackTrace
 import dev.ragnarok.fenrir.util.ViewUtils.setupSwipeRefreshLayoutWithCurrentTheme
 
 class LogsFragment : BaseMvpFragment<LogsPresenter, ILogsView>(), ILogsView,
@@ -142,6 +144,14 @@ class LogsFragment : BaseMvpFragment<LogsPresenter, ILogsView>(), ILogsView,
     }
 
     override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
+        if (menuItem.itemId == R.id.share_playback_debug) {
+            PlaybackTrace.export(requireContext()) { file ->
+                val host = activity
+                if (host != null && file != null) shareExternal(host, file, "application/zip")
+                else if (host != null) customToast?.showToast(R.string.playback_debug_export_failed)
+            }
+            return true
+        }
         if (menuItem.itemId == R.id.delete_menu) {
             presenter?.fireClear()
             return true
