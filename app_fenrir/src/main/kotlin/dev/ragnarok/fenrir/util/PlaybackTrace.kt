@@ -50,7 +50,7 @@ object PlaybackTrace {
     private fun directory(context: Context): File =
         File(context.getExternalFilesDir(null) ?: context.filesDir, "playback-debug").apply { mkdirs() }
 
-    fun event(context: Context, event: String, vararg fields: Pair<String, Any?>) {
+    fun event(context: Context, event: String, vararg fields: kotlin.Pair<String, Any?>) {
         // Freeze values on caller thread; writer never reads mutable player/Audio objects.
         val app = context.applicationContext
         val record = JSONObject().put("schema", 1).put("process", process)
