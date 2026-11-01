@@ -48,7 +48,8 @@ with tempfile.TemporaryDirectory(prefix='fenrir-playback-') as temp:
     (temp/'Resume.kt').write_text(text)
     # Include the real util.Pair: it must not shadow kotlin.Pair in PlaybackTrace.
     files = list((ROOT/'ci/playback-tests').glob('*.kt')) + [temp/'Order.kt', temp/'Resume.kt',
-        source/'util/PersistentShuffle.kt', source/'util/PlaybackTrace.kt', source/'util/Pair.kt']
+        source/'util/PersistentShuffle.kt', source/'util/PlaybackTrace.kt', source/'util/Pair.kt',
+        source/'util/MyMusicPolicy.kt']
     plugin = next(j for j in jars if 'serialization-compiler-plugin' in j)
     subprocess.run(['java', '-cp', classpath, 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
         '-no-stdlib', '-no-reflect', '-classpath', classpath, f'-Xplugin={plugin}',

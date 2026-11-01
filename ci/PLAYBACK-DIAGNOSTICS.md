@@ -36,6 +36,8 @@
 - `shuffle_build`: размер и число уникальных ключей, история до/после, число оставшихся, максимум размера, предположение о полноте, сброс прохода и текущий индекс.
 - `shuffle_order`: все индексы и псевдонимы в фактическом порядке, по 80 элементов. `entries`: `индекс:track:recording`. Связывать с последним `shuffle_build` по process/source; `generation` соответствует `orderGeneration` плеерных событий.
 - `shuffle_mark`: добавлен ли новый ключ или трек уже был в истории.
+- `shuffle_reanchor`: ручной выбор трека в очереди при персистентном шафле; сразу за ним — `shuffle_build` с `anchor` = выбранный индекс. `command_play_at.explicit=true` отличает выбор в очереди от старта списка.
+- `transparent_cache_skipped`: прозрачное кэширование не запущено, потому что очередь не из «Моей музыки» (`reason=not_my_music`).
 - `pass_boundary`: новый автоматический проход; отличает законный повтор от возврата внутри прохода.
 - `transition`: вход в трек. Media3 reason: 0 — REPEAT, 1 — AUTO, 2 — SEEK, 3 — PLAYLIST_CHANGED.
 - `discontinuity`: **позиция старого трека до перехода**, его ожидаемая длительность, новый индекс/позиция и reason. Discontinuity reason отличается от transition reason: 0 — AUTO_TRANSITION, 1 — SEEK, 2 — SEEK_ADJUSTMENT, 3 — SKIP, 4 — REMOVE, 5 — INTERNAL.

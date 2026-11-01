@@ -81,6 +81,7 @@ import dev.ragnarok.fenrir.util.MissingTrackNotifier
 import dev.ragnarok.fenrir.util.PersistentShuffle
 import dev.ragnarok.fenrir.util.PlaybackTrace
 import dev.ragnarok.fenrir.util.TransparentCacheWorker
+import dev.ragnarok.fenrir.util.MyMusicPolicy
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils
 import dev.ragnarok.fenrir.util.coroutines.CancelableJob
@@ -956,9 +957,21 @@ class MusicPlaybackService : MediaSessionService() {
             exoplayer.seekToNext()
         }
 
-        fun playAt(position: Int) {
-            trace("command_play_at", "target" to position)
+        fun playAt(position: Int, explicitSelection: Boolean = false) {
+            trace("command_play_at", "target" to position, "explicit" to explicitSelection)
             exoplayer.seekTo(position, 0)
+            // FENRIR-CI: ручной выбор трека в очереди при персистентном шафле. История прохода
+            // лежит в начале перестановки (до текущего трека), поэтому выбор трека оттуда
+            // раньше уводил плеер дальше по истории — подряд звучали уже прослушанные треки.
+            // Перестраиваем порядок от выбранного трека: прослушанные — до него, ещё не
+            // звучавшие — после. Кнопки «Вперёд/Назад» порядок не перестраивают.
+            if (explicitSelection && MyMusicPolicy.reanchorOnExplicitSelection(
+                    exoplayer.shuffleModeEnabled, mService.get()?.currentQueueId
+                )
+            ) {
+                trace("shuffle_reanchor", "target" to position)
+                applyPersistentShuffleOrder()
+            }
             exoplayer.play()
         }
 
@@ -1226,7 +1239,15 @@ class MusicPlaybackService : MediaSessionService() {
                             ) {
                                 mService.get()?.notifyTrackUnavailable(audio)
                             }
-                            if (Settings.get().main().isForce_cache
+                            // FENRIR-CI: в «Папку с загруженной музыкой» кэшируем только треки
+                            // очереди «Моей музыки» — не из поиска, чужих плейлистов и т. п.
+                            val inMyMusic = MyMusicPolicy.shouldTransparentCache(
+                                mService.get()?.currentQueueId, accountId
+                            )
+                            if (Settings.get().main().isForce_cache && !inMyMusic) {
+                                trace("transparent_cache_skipped", "reason" to "not_my_music")
+                            }
+                            if (Settings.get().main().isForce_cache && inMyMusic
                                 && (!audio.isHLS || FenrirNative.isNativeLoaded || Settings.get()
                                     .main().isUse_api_5_90_for_audio)
                                 && audio.url?.contains("audio_api_unavailable") != true
@@ -1570,7 +1591,11 @@ class MusicPlaybackService : MediaSessionService() {
         }
         if (Constants.IS_DEBUG) Logger.d(TAG, "Going to next track")
         synchronized(this) {
-            musicPlayer.playAt(tmpPos)
+            musicPlayer.playAt(tmpPos, explicitSelection = true)
+            if (musicPlayer.shuffleMode) {
+                // Порядок мог перестроиться — экран очереди должен перечитать его.
+                notifyChange(QUEUE_CHANGED)
+            }
         }
     }
 

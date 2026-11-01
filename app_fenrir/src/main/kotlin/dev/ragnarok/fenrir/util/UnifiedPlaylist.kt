@@ -22,7 +22,8 @@ import java.util.concurrent.ConcurrentHashMap
  * произвольного пути через File.listFiles() — в отличие от MediaStore-запросов, эта
  * проверка не подменяется системой автоматически.
  *
- * appendLocalOnly() возвращает только те локальные треки, которых ещё нет в переданном
+ * appendLocalOnly() возвращает только те локальные треки «Папки с локальной музыкой»
+ * (файлы musicDir — никогда, см. MyMusicPolicy), которых ещё нет в переданном
  * VK-списке (дедуп по "artist|title" без учёта регистра — тот же ключ, что и в
  * AudiosLocalPresenter.mergeKey). VK-треки, у которых есть локальная копия, остаются в списке
  * и проигрывается из локального файла через MusicPlayer.makeMediaSource (приоритет локальной
@@ -50,6 +51,13 @@ object UnifiedPlaylist {
         }
     }
 
+    // FENRIR-CI: в хвост «Моей музыки+оффлайн» — только файлы «Папки с локальной музыкой».
+    // Файлы «Папки с загруженной музыкой» (musicDir) самостоятельными записями не
+    // подмешиваются: копия трека из списка уже представлена его VK-записью (и играет из
+    // файла), а файл без VK-записи в «Моей музыке» — не из списка (см. MyMusicPolicy).
+    private fun isUnifiedExtraCandidate(l: Audio, musicDir: String?, userFolder: String?): Boolean =
+        MyMusicPolicy.keepAsUnifiedExtra(l.url, musicDir, userFolder)
+
     private fun mergedLocalSnapshot(accountId: Long): Flow<List<Audio>> {
         return Stores.instance.localMedia().getLocalAudiosFromFolders(accountId)
     }
@@ -62,8 +70,11 @@ object UnifiedPlaylist {
         return mergedLocalSnapshot(accountId).map { locals ->
             cacheAll(locals)
             val extras = ArrayList<Audio>()
+            val main = Settings.get().main()
             for (l in locals) {
-                if (known.add(mergeKey(l))) {
+                if (isUnifiedExtraCandidate(l, main.musicDir, main.localAudioFolderA) &&
+                    known.add(mergeKey(l))
+                ) {
                     extras.add(l)
                 }
             }
@@ -91,8 +102,11 @@ object UnifiedPlaylist {
             known.add(mergeKey(a))
         }
         val extras = ArrayList<Audio>()
+        val main = Settings.get().main()
         for (l in snap) {
-            if (known.add(mergeKey(l))) {
+            if (isUnifiedExtraCandidate(l, main.musicDir, main.localAudioFolderA) &&
+                known.add(mergeKey(l))
+            ) {
                 extras.add(l)
             }
         }

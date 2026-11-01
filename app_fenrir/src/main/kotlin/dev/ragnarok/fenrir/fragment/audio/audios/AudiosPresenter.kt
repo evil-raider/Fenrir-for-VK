@@ -23,6 +23,7 @@ import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
 import dev.ragnarok.fenrir.util.FindAtWithContent
 import dev.ragnarok.fenrir.util.HelperSimple
 import dev.ragnarok.fenrir.util.HelperSimple.hasHelp
+import dev.ragnarok.fenrir.util.MyMusicPolicy
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils.getCauseIfRuntime
 import dev.ragnarok.fenrir.util.Utils.safeCheck
@@ -314,7 +315,7 @@ class AudiosPresenter(
     private val playbackQueueId: String?
         get() = when {
             iSSelectMode || searcher.isSearchMode -> null
-            isMyAudio -> "myaudio_$accountId"
+            isMyAudio -> MyMusicPolicy.myAudioQueueId(accountId)
             playlistId != null -> "playlist_${ownerId}_$playlistId"
             else -> null
         }

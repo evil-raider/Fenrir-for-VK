@@ -5,6 +5,7 @@ import de.maxr1998.modernpreferences.PreferenceScreen
 import dev.ragnarok.fenrir.model.Audio
 import dev.ragnarok.fenrir.util.PersistentShuffle as P
 import dev.ragnarok.fenrir.util.PlaybackTrace
+import dev.ragnarok.fenrir.util.MyMusicPolicy as M
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -144,6 +145,37 @@ private fun runTests() {
         }
     }
     assertions += 9
-    println("PASS: $assertions grouped checks; 1000 pass rebuilds, 500 permutation mutations, resume/store/rotation")
+    // Explicit tap on a history row (field log 2026-10-30): the old order continued through
+    // history; re-anchoring on the tapped track leaves only unplayed tracks after it.
+    val tap = "explicit_tap"
+    P.buildOrder(ctx, tap, tracks, 0)
+    (0..9).forEach { P.markPlayed(ctx, tap, tracks[it]) }
+    val before = P.buildOrder(ctx, tap, tracks, 15).toList()
+    val tapped = before.first()
+    check(tapped in 0..9)
+    check(before.drop(1).take(5).all { it in 0..9 }) // what the field log showed
+    check(M.reanchorOnExplicitSelection(true, tap) && !M.reanchorOnExplicitSelection(false, tap) &&
+        !M.reanchorOnExplicitSelection(true, null))
+    P.markPlayed(ctx, tap, tracks[15]) // the service marks the current track after building
+    val after = P.buildOrder(ctx, tap, tracks, tapped).toList()
+    check(after.drop(after.indexOf(tapped) + 1).toSet() == (10..19).toSet() - 15)
+    assertions += 4
+    // «Моя музыка+оффлайн»: musicDir files never become standalone entries; user folder files
+    // do (also when nested in musicDir); percent-encoded file URLs; caching gate.
+    val dl = "/storage/emulated/0/Music/Fenrir"
+    val own = "/storage/emulated/0/MyMusic"
+    check(!M.keepAsUnifiedExtra("file://$dl/Artist%20-%20Song.mp3", dl, own))
+    check(!M.keepAsUnifiedExtra("file://$dl/sub/%D0%90%D0%91.mp3", dl, own))
+    check(!M.keepAsUnifiedExtra("file://$dl/x.mp3", "$dl/", own))
+    check(M.keepAsUnifiedExtra("file://$own/a.mp3", dl, own))
+    check(M.keepAsUnifiedExtra("file://$dl/mine/a.mp3", dl, "$dl/mine"))
+    check(M.keepAsUnifiedExtra("file://${dl}2/a.mp3", dl, own)) // prefix, not a subfolder
+    check(M.keepAsUnifiedExtra("content://media/external/audio/1", dl, own))
+    check(!M.keepAsUnifiedExtra("file://$dl/a.mp3", dl, null))
+    check(M.filePath("file:///a/B%20c.mp3") == "/a/B c.mp3")
+    check(M.shouldTransparentCache("myaudio_7", 7) && !M.shouldTransparentCache(null, 7) &&
+        !M.shouldTransparentCache("playlist_7_1", 7) && !M.shouldTransparentCache("myaudio_8", 7))
+    assertions += 10
+    println("PASS: $assertions grouped checks; 1000 pass rebuilds, 500 permutation mutations, resume/store/rotation, explicit re-anchor, My Music policy")
     kotlin.system.exitProcess(0) // Production stores deliberately use process-lived executors.
 }
