@@ -84,9 +84,7 @@ class AudioInteractor(private val networker: INetworker) : IAudioInteractor {
         return networker.vkDefault(accountId)
             .audio()[playlist_id, ownerId, offset, count, accessKey]
             .map {
-                listEmptyIfNull(
-                    it.items
-                )
+                it.items ?: throw java.io.IOException("VK audio list response has no items")
             }
             .map { out ->
                 val ret: MutableList<Audio> = ArrayList()

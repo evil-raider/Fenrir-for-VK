@@ -38,6 +38,23 @@ fun main() {
     try { runTests() } catch (t: Throwable) { t.printStackTrace(); kotlin.system.exitProcess(1) }
 }
 private fun runTests() {
+    // Mark only at two thirds; a seek past the threshold is intentionally valid.
+    check(!dev.ragnarok.fenrir.util.PlaybackProgress.reachedTwoThirds(1999, 3000))
+    check(dev.ragnarok.fenrir.util.PlaybackProgress.reachedTwoThirds(2000, 3000))
+    check(dev.ragnarok.fenrir.util.PlaybackProgress.reachedTwoThirds(2700, 3000))
+    check(!dev.ragnarok.fenrir.util.PlaybackProgress.reachedTwoThirds(0, -1))
+    check(dev.ragnarok.fenrir.util.PlaybackProgress.reachedTwoThirds(Long.MAX_VALUE, Long.MAX_VALUE))
+    // A partial or rejected download cannot be committed as a full snapshot.
+    val staged = dev.ragnarok.fenrir.util.PlaylistSnapshotBuffer<Audio>(P::keyOf)
+    val cached = listOf(Audio(80), Audio(81))
+    staged.addPage(0, listOf(Audio(1), Audio(2), Audio(2)))
+    check(staged.offset == 3 && !staged.complete)
+    check(runCatching { staged.result() }.isFailure && cached.size == 2)
+    check(runCatching { staged.addPage(3, listOf(Audio(1))) }.isFailure)
+    staged.addPage(3, listOf(Audio(3)))
+    staged.addPage(4, emptyList())
+    check(staged.result().map { it.id } == listOf(1, 2, 3))
+    check(runCatching { staged.addPage(4, emptyList()) }.isFailure)
     val ctx = Context()
     val tracks = (0..19).map { Audio(it) }
     var assertions = 0
@@ -55,6 +72,19 @@ private fun runTests() {
         check(suffix.toSet() == (tracks.indices.toSet() - played - current))
         assertions += 2
     }
+    // Failed tracks remain unplayed, are postponed after other eligible tracks,
+    // and do not trigger a pass reset even when all other tracks are heard.
+    val deferredSource = "deferred"
+    P.confirmSnapshot(ctx, deferredSource, tracks.take(4))
+    P.markPlayed(ctx, deferredSource, tracks[0])
+    val deferred = setOf(P.keyOf(tracks[1]))
+    val deferredOrder = P.buildOrder(ctx, deferredSource, tracks.take(4), 0, deferred).toList()
+    check(deferredOrder.drop(1).take(2).toSet() == setOf(2, 3))
+    check(deferredOrder.last() == 1 && !P.wasPlayed(ctx, deferredSource, tracks[1]))
+    P.markPlayed(ctx, deferredSource, tracks[2]); P.markPlayed(ctx, deferredSource, tracks[3])
+    check(!P.isPassComplete(ctx, deferredSource, tracks.take(4)))
+    check(!P.wasPlayed(ctx, deferredSource, tracks[1]))
+
     // Mid-song appends, restart/re-hydration, independence between sources.
     val source = "append_restore"
     P.markPlayed(ctx, source, tracks[0]); P.markPlayed(ctx, source, tracks[2])
@@ -71,6 +101,7 @@ private fun runTests() {
     check(P.buildOrder(ctx, partial, tracks.take(5), 0).last() == 0)
     // End-of-pass only after ALL have been visited; next build starts a new pass.
     val cycle = "cycle"
+    P.confirmSnapshot(ctx, cycle, tracks)
     P.buildOrder(ctx, cycle, tracks, 0)
     tracks.dropLast(1).forEach { P.markPlayed(ctx, cycle, it) }
     check(!P.isPassComplete(ctx, cycle, tracks))
@@ -81,11 +112,27 @@ private fun runTests() {
     val comma = Audio(99, isLocal = true, url = "file:///music/a,b.mp3")
     P.markPlayed(ctx, "comma", comma); hydrateAgain()
     check(P.buildOrder(ctx, "comma", listOf(comma, tracks[0]), 1).toList() == listOf(0, 1))
-    // Old CSV state still migrates without resetting valid old keys.
+    // Legacy visit-only state cannot prove two-thirds listening and must not migrate.
     PreferenceScreen.getPreferences(ctx).edit().putString("ci_shuffle_played_legacy", "0_1,2_1")
     hydrateAgain()
     val legacyOrder = P.buildOrder(ctx, "legacy", tracks, 2).toList()
-    check(legacyOrder.drop(legacyOrder.indexOf(2) + 1).toSet() == tracks.indices.toSet() - setOf(0, 2))
+    check(legacyOrder.drop(legacyOrder.indexOf(2) + 1).toSet() == tracks.indices.toSet() - setOf(2))
+    check(P.keyOf(Audio(10, artist = "Artist", title = "Song")) ==
+        P.keyOf(Audio(20, isLocal = true, url = "file:///song", artist = " artist ", title = "SONG")))
+    // Size alone is never enough to prove that a playlist is complete.
+    val unknown = "unknown_complete"
+    tracks.take(5).forEach { P.markPlayed(ctx, unknown, it) }
+    check(!P.isPassComplete(ctx, unknown, tracks.take(5)))
+    P.confirmSnapshot(ctx, unknown, tracks)
+    check(!P.isPassComplete(ctx, unknown, tracks.take(5)))
+    // A smaller, confirmed current library replaces an obsolete inflated max.
+    P.confirmSnapshot(ctx, unknown, tracks.take(5))
+    check(P.isPassComplete(ctx, unknown, tracks.take(5)))
+    // Visiting many other sources must not evict an old listening history.
+    P.markPlayed(ctx, "keep_old_source", tracks[0])
+    repeat(40) { P.markPlayed(ctx, "other_source_$it", tracks[1]) }
+    hydrateAgain()
+    check(P.wasPlayed(ctx, "keep_old_source", tracks[0]))
     // Online identity must not change when URL is refreshed or replaced by a local copy.
     check(P.keyOf(Audio(7, url = "https://old")) == P.keyOf(Audio(7, url = "file:///cached")))
     assertions += 12

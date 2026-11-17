@@ -418,18 +418,15 @@ class MusicPlaybackService : MediaSessionService() {
             )
             currentQueueId = snapshot.queueId
             stopRequested = false
-            RestoredUrlRefresher.reset(snapshot.audios)
-            musicPlayer.beginExternalRestore(snapshot.audios)
-            val items = ArrayList<MediaItem>(snapshot.audios.size)
-            for (audio in snapshot.audios) {
-                items.add(musicPlayer.makeMediaItem(audio))
-            }
+            val restored = if (snapshot.queueId != null) snapshot.audios.distinctBy(PersistentShuffle::keyOf) else snapshot.audios
+            val selectedKey = PersistentShuffle.keyOf(snapshot.audios[snapshot.index])
+            val index = restored.indexOfFirst { PersistentShuffle.keyOf(it) == selectedKey }.coerceAtLeast(0)
+            RestoredUrlRefresher.reset(restored)
+            musicPlayer.beginExternalRestore(restored)
+            val items = ArrayList<MediaItem>(restored.size)
+            for (audio in restored) items.add(musicPlayer.makeMediaItem(audio))
             refreshMediaButtonCustomLayout()
-            return MediaSession.MediaItemsWithStartPosition(
-                items,
-                snapshot.index,
-                snapshot.positionMs
-            )
+            return MediaSession.MediaItemsWithStartPosition(items, index, snapshot.positionMs)
         }
     }
 
@@ -572,6 +569,12 @@ class MusicPlaybackService : MediaSessionService() {
             TAG,
             "handleCommandIntent: action = $action"
         )
+        if (ACTION_SYNC_PLAYLIST == action) {
+            val audios = consumePendingSync()
+            val queueId = consumePendingSyncQueueId()
+            if (audios != null && queueId != null) syncCurrentQueue(audios, queueId)
+            return
+        }
         if (ACTION_APPEND_PLAYLIST == action) {
             // FENRIR-CI: живая дозапись офлайн-треков в уже играющую очередь «Моей музыки».
             val appendAudios = consumePendingAppend()
@@ -602,8 +605,11 @@ class MusicPlaybackService : MediaSessionService() {
                     changed = true
                 }
                 currentQueueId = queueId
-                musicPlayer.setSources(audios, position)
-                musicPlayer.playAt(position)
+                val unique = if (queueId != null) audios.distinctBy(PersistentShuffle::keyOf) else audios
+                val selected = audios.getOrNull(position)?.let(PersistentShuffle::keyOf)
+                val selectedIndex = unique.indexOfFirst { PersistentShuffle.keyOf(it) == selected }.coerceAtLeast(0)
+                musicPlayer.setSources(unique, selectedIndex)
+                musicPlayer.playAt(selectedIndex)
                 if (musicPlayer.shuffleMode != shuffleMode) {
                     musicPlayer.shuffleMode = shuffleMode
                     notifyChange(SHUFFLE_MODE_CHANGED)
@@ -646,6 +652,9 @@ class MusicPlaybackService : MediaSessionService() {
 
         private var errorsCount = 0
         private var hasErrorPlayback = false
+        private val rejectedLocalCopies = HashSet<String>()
+        private val deferredTracks = HashSet<String>()
+        private var errorTrackKey: String? = null
 
         // FENRIR-CI: шафл восстановленной очереди включаем после того, как Media3 выставит
         // media item'ы (см. beginExternalRestore / onTimelineChanged).
@@ -694,20 +703,26 @@ class MusicPlaybackService : MediaSessionService() {
             buildMediaSource(makeMediaItem(audio), audio)
 
         internal fun makeMediaItem(audio: Audio): MediaItem {
-            if (!audio.isLocal && !audio.isLocalServer && TrackIsDownloaded(audio) == 1) {
+            // A playback URI must not mutate the shared Audio in the UI/cache.
+            var localPlaybackUrl: String? = null
+            if (!audio.isLocal && !audio.isLocalServer &&
+                PersistentShuffle.keyOf(audio) !in rejectedLocalCopies && TrackIsDownloaded(audio) == 1) {
                 // FENRIR-CI: локальную копию используем только если файл реально существует;
                 // иначе (файл удалён мимо приложения) откатываемся на онлайн-ссылку.
                 val localLink = GetLocalTrackLink(audio)
                 val localPath = localLink?.toUri()?.path
                 if (!localPath.isNullOrEmpty() && File(localPath).exists()) {
-                    audio.setUrl(localLink)
+                    localPlaybackUrl = localLink
                 }
             }
-            var res: String? = audio.url
+            var res: String? = localPlaybackUrl ?: audio.url
+            if (!audio.isLocal && PersistentShuffle.keyOf(audio) in rejectedLocalCopies &&
+                (res?.startsWith("file:") == true || res?.startsWith("content:") == true)) res = null
             if (res?.contains("audio_api_unavailable") == true) {
                 res = null
             }
-            if (res.isNullOrEmpty() && !audio.isLocal && !audio.isLocalServer) {
+            if (res.isNullOrEmpty() && !audio.isLocal && !audio.isLocalServer &&
+                PersistentShuffle.keyOf(audio) !in rejectedLocalCopies) {
                 // FENRIR-CI (Этап 3, доводка): трек удалён/заблокирован на VK и не скачан в папку B —
                 // ищем локальную копию по artist+title среди файлов папок A/B (работает и в
                 // отдельных VK-плейлистах, не только в «Моей музыке», см. UnifiedPlaylist).
@@ -855,7 +870,10 @@ class MusicPlaybackService : MediaSessionService() {
 
         fun setSources(audios: List<Audio>, startIndex: Int = 0) {
             // FENRIR-CI: новая очередь из приложения — свежие ссылки, восстановление не нужно.
-            RestoredUrlRefresher.clear()
+            // Cache snapshots can contain expired VK URLs too, not just resumed queues.
+            RestoredUrlRefresher.reset(audios)
+            deferredTracks.clear()
+            errorTrackKey = null
             pendingRestoreShuffle = false
             errorsCount = 0
             hasErrorPlayback = false
@@ -887,10 +905,10 @@ class MusicPlaybackService : MediaSessionService() {
                 trace("shuffle_build_skipped", "queueSize" to q.size)
                 return
             }
-            val order = PersistentShuffle.buildOrder(ctx, ctx.currentQueueId, q, exoplayer.currentMediaItemIndex)
+            val order = PersistentShuffle.buildOrder(ctx, ctx.currentQueueId, q,
+                exoplayer.currentMediaItemIndex, deferredTracks)
             if (order.size == exoplayer.mediaItemCount) {
                 exoplayer.setShuffleOrder(MusicShuffleOrder(order, System.nanoTime()))
-                PersistentShuffle.markPlayed(ctx, ctx.currentQueueId, currentAudio)
                 val build = ++orderGeneration
                 order.toList().chunked(80).forEachIndexed { chunk, indexes ->
                     PlaybackTrace.event(ctx, "shuffle_order", "generation" to build,
@@ -898,6 +916,38 @@ class MusicPlaybackService : MediaSessionService() {
                         "entries" to indexes.joinToString(",") { "$it:${PlaybackTrace.audio(q[it])}:${PlaybackTrace.recording(q[it])}" })
                 }
             }
+        }
+
+        /** Reconcile the active queue without restarting the current item. */
+        fun syncSources(audios: List<Audio>): Boolean {
+            val desired = audios.distinctBy(PersistentShuffle::keyOf)
+            val wanted = desired.map(PersistentShuffle::keyOf).toSet()
+            var changed = false
+            val currentIndex = exoplayer.currentMediaItemIndex
+            val keep = HashMap<String, Int>()
+            for (i in currentQueue.indices) {
+                val key = PersistentShuffle.keyOf(currentQueue[i])
+                if (key !in keep || i == currentIndex) keep[key] = i
+            }
+            for (i in currentQueue.indices.reversed()) {
+                val key = PersistentShuffle.keyOf(currentQueue[i])
+                if (key !in wanted || keep[key] != i) {
+                    exoplayer.removeMediaItem(i)
+                    changed = true
+                }
+            }
+            // Re-evaluate after removals, so duplicate current entries cannot survive.
+            currentQueue = currentAudiosInMediaOrder()
+            val have = currentQueue.map(PersistentShuffle::keyOf).toHashSet()
+            val additions = desired.filter { have.add(PersistentShuffle.keyOf(it)) }
+            if (additions.isNotEmpty()) {
+                currentQueue = currentQueue + additions
+                exoplayer.addMediaSources(additions.map(::makeMediaSource))
+                changed = true
+            }
+            if (changed && exoplayer.shuffleModeEnabled) applyPersistentShuffleOrder()
+            if (changed) trace("queue_sync", "desired" to desired.size, "size" to currentQueue.size)
+            return changed
         }
 
         fun insertSourceAfterCurrent(audio: Audio) {
@@ -943,6 +993,18 @@ class MusicPlaybackService : MediaSessionService() {
 
         fun play() {
             if (isPrepared) {
+                if (exoplayer.playerError != null) {
+                    deferredTracks.clear()
+                    errorsCount = 0
+                    errorTrackKey = null
+                    exoplayer.prepare()
+                }
+                if (exoplayer.playbackState == Player.STATE_ENDED && exoplayer.shuffleModeEnabled) {
+                    // Re-anchor after a completed or manually-skipped partial pass;
+                    // play the next eligible item, not the just-ended item again.
+                    applyPersistentShuffleOrder()
+                    if (exoplayer.hasNextMediaItem()) exoplayer.seekToNextMediaItem()
+                }
                 exoplayer.play()
             }
         }
@@ -1093,18 +1155,41 @@ class MusicPlaybackService : MediaSessionService() {
         private val tracePlayerId = java.util.UUID.randomUUID().toString()
         private var orderGeneration = 0L
         private var twoThirdsLogged = false
+        private var heartbeatTicks = 0
+        private val knownDurations = HashMap<String, Long>()
         private val traceHandler = Handler(exoplayer.applicationLooper)
         private val heartbeat = object : Runnable {
             override fun run() {
                 if (!exoplayer.isPlaying) return
-                trace("heartbeat")
-                val duration = exoplayer.duration
-                if (!twoThirdsLogged && duration > 0 && exoplayer.currentPosition >= duration * 2 / 3) {
-                    twoThirdsLogged = true
-                    trace("two_thirds") // Observation only; never changes playback.
-                }
-                traceHandler.postDelayed(this, 15_000)
+                if (heartbeatTicks++ % 15 == 0) trace("heartbeat")
+                rememberAndMarkCurrent()
+                traceHandler.postDelayed(this, 1_000)
             }
+        }
+
+        private fun markProgress(audio: Audio?, position: Long, duration: Long, uri: String?) {
+            val ctx = mService.get() ?: return
+            if (!exoplayer.shuffleModeEnabled || audio == null || uri?.contains("audio_error.ogg") == true) return
+            val actual = duration.takeIf { it > 0 }
+                ?: knownDurations[PersistentShuffle.keyOf(audio)]
+                ?: audio.duration.toLong().times(1000).takeIf { it > 0 }
+                ?: return
+            if (dev.ragnarok.fenrir.util.PlaybackProgress.reachedTwoThirds(position, actual)
+                && !PersistentShuffle.wasPlayed(ctx, ctx.currentQueueId, audio)) {
+                PersistentShuffle.markPlayed(ctx, ctx.currentQueueId, audio)
+            }
+        }
+
+        private fun rememberAndMarkCurrent() {
+            val item = exoplayer.currentMediaItem ?: return
+            val audio = item.localConfiguration?.tag as? Audio ?: return
+            val duration = exoplayer.duration
+            if (duration > 0) knownDurations[PersistentShuffle.keyOf(audio)] = duration
+            if (!twoThirdsLogged && dev.ragnarok.fenrir.util.PlaybackProgress.reachedTwoThirds(exoplayer.currentPosition, duration)) {
+                twoThirdsLogged = true
+                trace("two_thirds")
+            }
+            markProgress(audio, exoplayer.currentPosition, duration, item.localConfiguration?.uri?.toString())
         }
 
         private fun currentAudiosInMediaOrder(): List<Audio> =
@@ -1163,8 +1248,8 @@ class MusicPlaybackService : MediaSessionService() {
                         }
 
                         Player.STATE_ENDED -> {
+                            rememberAndMarkCurrent()
                             pause()
-                            seek(0)
                         }
 
                         else -> {
@@ -1177,11 +1262,11 @@ class MusicPlaybackService : MediaSessionService() {
                     trace("is_playing", "playing" to isPlaying)
                     traceHandler.removeCallbacks(heartbeat)
                     if (isPlaying) {
-                        errorsCount = 0
-                        hasErrorPlayback = false
-                        traceHandler.postDelayed(heartbeat, 15_000)
+                        rememberAndMarkCurrent()
+                        traceHandler.postDelayed(heartbeat, 1_000)
                     }
                     if (!isPlaying) {
+                        rememberAndMarkCurrent()
                         mService.get()?.saveResumeState()
                         mService.get()?.scheduleDelayedShutdown()
                     } else {
@@ -1222,13 +1307,10 @@ class MusicPlaybackService : MediaSessionService() {
                         mService.get()?.notifyChange(META_CHANGED)
                         mService.get()?.saveResumeState()
 
-                        // FENRIR-CI: отмечаем реально прозвучавший трек для персистентного шафла,
-                        // чтобы охват был равномерным даже при частых прерываниях/перезапусках.
-                        if (exoplayer.shuffleModeEnabled) {
-                            val playedAudio = mediaItem?.localConfiguration?.tag as? Audio
-                            if (playedAudio != null) {
-                                mService.get()?.let { PersistentShuffle.markPlayed(it, it.currentQueueId, playedAudio) }
-                            }
+                        // Manual previous/next and external controller seeks can enter history.
+                        // Re-anchor so the automatic successor is never another history item.
+                        if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK && exoplayer.shuffleModeEnabled) {
+                            applyPersistentShuffleOrder()
                         }
 
                         val accountId = Settings.get().accounts().current
@@ -1339,6 +1421,9 @@ class MusicPlaybackService : MediaSessionService() {
                     reason: Int
                 ) {
                     val oldAudio = oldPosition.mediaItem?.localConfiguration?.tag as? Audio
+                    markProgress(oldAudio, oldPosition.positionMs, -1,
+                        oldPosition.mediaItem?.localConfiguration?.uri?.toString())
+                    rememberAndMarkCurrent()
                     trace("discontinuity", "reason" to reason,
                         "oldIndex" to oldPosition.mediaItemIndex,
                         "oldTrack" to PlaybackTrace.audio(oldAudio), "oldMs" to oldPosition.positionMs,
@@ -1354,31 +1439,56 @@ class MusicPlaybackService : MediaSessionService() {
                         trace("error_rebuild_restored")
                         return
                     }
-                    mService.get()?.let {
+                    mService.get()?.let { service ->
+                        val failed = currentAudio
+                        val failedKey = failed?.let(PersistentShuffle::keyOf)
+                        if (failedKey != errorTrackKey) {
+                            errorTrackKey = failedKey
+                            errorsCount = 0
+                        }
                         errorsCount++
                         if (errorsCount > 4) {
-                            errorsCount = 0
-                            if (hasErrorPlayback) {
-                                trace("error_stop_service")
-                                it.stopPlaybackService()
-                            } else if (exoplayer.hasNextMediaItem()) {
-                                hasErrorPlayback = true
-                                val next = exoplayer.nextMediaItemIndex
-                                trace("error_skip", "target" to next)
+                            if (failedKey != null) deferredTracks.add(failedKey)
+                            // Defer without marking it heard. Visit every other eligible
+                            // track first; never loop endlessly over only broken entries.
+                            fun eligible(index: Int): Boolean {
+                                val audio = currentQueue.getOrNull(index) ?: return false
+                                val key = PersistentShuffle.keyOf(audio)
+                                return key != failedKey && key !in deferredTracks &&
+                                    !PersistentShuffle.wasPlayed(service, service.currentQueueId, audio)
+                            }
+                            if (exoplayer.shuffleModeEnabled) applyPersistentShuffleOrder()
+                            val order = getShuffleOrderIndexes()
+                            val pos = order.indexOf(exoplayer.currentMediaItemIndex)
+                            val candidates = if (pos >= 0) order.drop(pos + 1) + order.take(pos) else order
+                            val next = candidates.firstOrNull(::eligible) ?: C.INDEX_UNSET
+                            if (next != C.INDEX_UNSET && next != exoplayer.currentMediaItemIndex) {
+                                trace("error_deferred", "target" to next)
+                                errorsCount = 0
+                                errorTrackKey = null
                                 exoplayer.stop()
                                 exoplayer.prepare()
-                                exoplayer.seekTo(
-                                    next,
-                                    0
-                                )
+                                exoplayer.seekTo(next, 0)
                                 exoplayer.play()
                             } else {
-                                trace("error_no_next")
+                                trace("error_waiting_for_retry")
+                                exoplayer.pause()
                             }
                         } else {
                             val index = exoplayer.currentMediaItemIndex
                             val position = exoplayer.currentPosition
+                            val item = exoplayer.currentMediaItem
+                            val audio = item?.localConfiguration?.tag as? Audio
+                            val uri = item?.localConfiguration?.uri?.toString().orEmpty()
                             trace("error_retry", "attempt" to errorsCount, "targetMs" to position)
+                            if (audio != null && !audio.isLocal && !audio.isLocalServer) {
+                                // A corrupt downloaded copy must not shadow a viable VK stream.
+                                if (uri.startsWith("file:") || uri.startsWith("content:")) {
+                                    rejectedLocalCopies.add(PersistentShuffle.keyOf(audio))
+                                }
+                                RestoredUrlRefresher.invalidate(audio)
+                                exoplayer.replaceMediaItem(index, makeMediaItem(audio))
+                            }
                             exoplayer.stop()
                             exoplayer.prepare()
                             exoplayer.seekTo(index, position)
@@ -1435,6 +1545,13 @@ class MusicPlaybackService : MediaSessionService() {
     // FENRIR-CI: живая дозапись офлайн-«довесков» в уже играющую очередь «Моей музыки».
     // Срабатывает, только если плеер готов/готовится И активная очередь помечена тем же
     // queueId — иначе no-op, чтобы не влезть в чужой запущенный плейлист.
+    internal fun syncCurrentQueue(audios: List<Audio>, queueId: String) {
+        synchronized(this) {
+            if (currentQueueId != queueId || (!musicPlayer.isPrepared && !musicPlayer.isPreparing)) return
+            if (musicPlayer.syncSources(audios)) notifyChange(QUEUE_CHANGED)
+        }
+    }
+
     internal fun appendToCurrentQueue(audios: List<Audio>, queueId: String) {
         synchronized(this) {
             if (!musicPlayer.isPrepared && !musicPlayer.isPreparing) {
@@ -1902,6 +2019,7 @@ class MusicPlaybackService : MediaSessionService() {
 
         const val ACTION_PLAYLIST = "start_playlist"
         const val ACTION_APPEND_PLAYLIST = "append_playlist"
+        const val ACTION_SYNC_PLAYLIST = "sync_playlist"
         const val MAX_QUEUE_SIZE = 200
 
         // FENRIR-CI: полный список треков передаётся в процессе (см. pendingQueue), а НЕ через
@@ -1916,6 +2034,11 @@ class MusicPlaybackService : MediaSessionService() {
         private var pendingQueueId: String? = null
 
         // FENRIR-CI: офлайн-«довески», ожидающие живой дозаписи в играющую очередь.
+        @Volatile private var pendingSync: List<Audio>? = null
+        @Volatile private var pendingSyncQueueId: String? = null
+        private fun consumePendingSync(): List<Audio>? = pendingSync.also { pendingSync = null }
+        private fun consumePendingSyncQueueId(): String? = pendingSyncQueueId.also { pendingSyncQueueId = null }
+
         @Volatile
         private var pendingAppend: List<Audio>? = null
 
@@ -1970,6 +2093,14 @@ class MusicPlaybackService : MediaSessionService() {
         // в appendToCurrentQueue) — иначе no-op. Вызывать только когда плеер уже играет/готовится
         // (см. AudiosPresenter.maybeAppendOfflineToLivePlayback), чтобы не поднимать сервис
         // из фона ради пустой операции.
+        fun syncPlayListIfCurrent(context: Context, audios: List<Audio>, queueId: String) {
+            pendingSync = ArrayList(audios)
+            pendingSyncQueueId = queueId
+            val intent = Intent(context, MusicPlaybackService::class.java)
+            intent.action = ACTION_SYNC_PLAYLIST
+            context.startService(intent)
+        }
+
         fun appendToPlayListIfCurrent(
             context: Context,
             audios: List<Audio>,

@@ -13,6 +13,7 @@ import dev.ragnarok.fenrir.fragment.base.AccountDependencyPresenter
 import dev.ragnarok.fenrir.media.music.MusicPlaybackController
 import dev.ragnarok.fenrir.media.music.MusicPlaybackService.Companion.appendToPlayListIfCurrent
 import dev.ragnarok.fenrir.media.music.MusicPlaybackService.Companion.startForPlayList
+import dev.ragnarok.fenrir.media.music.MusicPlaybackService.Companion.syncPlayListIfCurrent
 import dev.ragnarok.fenrir.model.Audio
 import dev.ragnarok.fenrir.model.AudioPlaylist
 import dev.ragnarok.fenrir.nonNullNoEmpty
@@ -24,6 +25,9 @@ import dev.ragnarok.fenrir.util.FindAtWithContent
 import dev.ragnarok.fenrir.util.HelperSimple
 import dev.ragnarok.fenrir.util.HelperSimple.hasHelp
 import dev.ragnarok.fenrir.util.MyMusicPolicy
+import dev.ragnarok.fenrir.util.PersistentShuffle
+import dev.ragnarok.fenrir.util.PlaybackTrace
+import dev.ragnarok.fenrir.util.PlaylistSnapshotBuffer
 import dev.ragnarok.fenrir.util.UnifiedPlaylist
 import dev.ragnarok.fenrir.util.Utils.getCauseIfRuntime
 import dev.ragnarok.fenrir.util.Utils.safeCheck
@@ -34,6 +38,7 @@ import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.fromIOToMain
 import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.hiddenIO
 import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.toMain
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import java.util.Locale
 
 class AudiosPresenter(
@@ -59,6 +64,13 @@ class AudiosPresenter(
     // FENRIR-CI: количество полученных от VK треков (без подмешанных локальных) —
     // корректный offset для запроса следующей страницы VK.
     private var receivedVkCount = 0
+    // Refresh is staged separately; neither the displayed list nor disk cache changes
+    // until every page has succeeded. Generation rejects late callbacks from old refreshes.
+    @Volatile private var vkRefreshGeneration = 0L
+    private val snapshotWriteLock = kotlinx.coroutines.sync.Mutex()
+    private var vkRefresh: PlaylistSnapshotBuffer<Audio>? = null
+    private var localMergeGeneration = 0L
+    private var completeVkSnapshot = false
 
     // FENRIR-CI: сигнатура последнего применённого набора локальных «довесков» — чтобы не
     // пересобирать хвост и не дёргать notifyListChanged на каждой из ~N страниц VK, если
@@ -106,10 +118,9 @@ class AudiosPresenter(
                                 mergeLocalUnified()
                                 // FENRIR-CI: кэш мог содержать треки без url — резолвим их.
                                 resolveMissingUrls(it)
-                                // FENRIR-CI: список пришёл из локального кэша — дозагружаем
-                                // остаток «Моей музыки» с того места, где кэш закончился.
+                                // Обновляем целый снимок в фоне, не удаляя список из кэша.
                                 if (isMyAudio) {
-                                    requestList(receivedVkCount, playlistId)
+                                    fireRefresh()
                                 }
                             }
                         }, {
@@ -132,6 +143,10 @@ class AudiosPresenter(
     }
 
     private fun requestNext() {
+        if (isMyAudio && !iSSelectMode) {
+            if (!loadingNow) fireRefresh()
+            return
+        }
         setLoadingNow(true)
         val offset = receivedVkCount
         requestList(offset, playlistId)
@@ -179,6 +194,9 @@ class AudiosPresenter(
         // остаётся в списке отдельной "локальной" записью и задваивается, когда
         // его "настоящая" VK-версия подгружается на одной из следующих страниц.
         mergeLocalUnified()
+        if (!isMyAudio && data.isEmpty() && offset > 0 && !iSSelectMode && !searcher.isSearchMode) {
+            PersistentShuffle.confirmSnapshot(Includes.provideApplicationContext(), playbackQueueId, audios)
+        }
         // FENRIR-CI: догружаем реальные ссылки для треков этой страницы с пустым url —
         // чтобы отличать "ссылка ещё не получена" от "реально удалён правообладателем".
         resolveMissingUrls(data)
@@ -273,23 +291,22 @@ class AudiosPresenter(
             )
             return
         }
-        val vkOnly = audios.filterNot {
-            it.url?.startsWith("file://") == true || it.url?.startsWith("content://") == true
-        }
+        val vkOnly = audios.filterNot { it.isLocal }
+        val generation = ++localMergeGeneration
         audioListDisposable.add(
             UnifiedPlaylist.appendLocalOnly(accountId, vkOnly)
                 .fromIOToMain({ extras ->
+                    if (generation != localMergeGeneration) return@fromIOToMain
                     // FENRIR-CI: сигнатура текущего набора офлайн-«довесков».
                     val sig = extras.joinToString("\u0001") { it.url ?: "" }
-                    val firstLocalIdx = audios.indexOfFirst {
-                        it.url?.startsWith("file://") == true || it.url?.startsWith("content://") == true
-                    }
+                    val firstLocalIdx = audios.indexOfFirst { it.isLocal }
                     // FENRIR-CI: набор офлайн-файлов не изменился и хвост уже на месте (либо
                     // офлайна нет вовсе) — выходим, чтобы не мигать списком и не пересобирать
                     // его на каждой странице VK. Условие самокорректирующееся: если хвост
                     // пропал (например, после fireRefresh список очистился), а extras не пуст —
                     // локальные треки будут добавлены заново.
                     if (sig == lastLocalExtrasSig && (firstLocalIdx >= 0 || extras.isEmpty())) {
+                        syncUnifiedSnapshot()
                         return@fromIOToMain
                     }
                     if (firstLocalIdx >= 0) {
@@ -304,9 +321,18 @@ class AudiosPresenter(
                     view?.notifyListChanged()
                     // FENRIR-CI: если «Моя музыка» уже играет — дозаписываем эти офлайн-треки
                     // в живую очередь плеера, чтобы они попали и в шафл без перезапуска.
-                    maybeAppendOfflineToLivePlayback(extras)
+                    syncUnifiedSnapshot()
                 }) { }
         )
+    }
+
+    private fun syncUnifiedSnapshot() {
+        val queueId = myAudioQueueId ?: return
+        val context = Includes.provideApplicationContext()
+        if (completeVkSnapshot) PersistentShuffle.confirmSnapshot(context, queueId, audios)
+        if (MusicPlaybackController.isInitialized || MusicPlaybackController.isPreparing) {
+            syncPlayListIfCurrent(context, audios, queueId)
+        }
     }
 
     // FENRIR-CI: идентификатор ИСТОЧНИКА для персистентного шафла (см. PersistentShuffle).
@@ -354,9 +380,7 @@ class AudiosPresenter(
             if (extras.nonNullNoEmpty()) {
                 val startSize = audios.size
                 audios.addAll(extras)
-                lastLocalExtrasSig = audios.filter {
-                    it.url?.startsWith("file://") == true || it.url?.startsWith("content://") == true
-                }.joinToString("\u0001") { it.url ?: "" }
+                lastLocalExtrasSig = audios.filter { it.isLocal }.joinToString("\u0001") { it.url ?: "" }
                 view?.notifyDataAdded(startSize, extras.size)
             }
         }
@@ -453,7 +477,81 @@ class AudiosPresenter(
         sleep_search(q?.trim())
     }
 
+    private fun refreshMyMusicPage(generation: Long, offset: Int) {
+        audioListDisposable.add(
+            audioInteractor[accountId, playlistId, ownerId, offset, GET_COUNT, accessKey]
+                .fromIOToMain({ page ->
+                    if (generation != vkRefreshGeneration) return@fromIOToMain
+                    val pending = vkRefresh ?: return@fromIOToMain
+                    PlaybackTrace.event(Includes.provideApplicationContext(), "library_page",
+                        "offset" to offset, "size" to page.size)
+                    try {
+                        pending.addPage(offset, page)
+                    } catch (error: IllegalStateException) {
+                        vkRefresh = null
+                        onListGetError(error)
+                        return@fromIOToMain
+                    }
+                    if (page.isNotEmpty()) {
+                        refreshMyMusicPage(generation, pending.offset)
+                    } else if (offset == 0 && audios.any { !it.isLocal }) {
+                        // A first empty page is ambiguous; don't erase a known snapshot.
+                        vkRefresh = null
+                        setLoadingNow(false)
+                        PlaybackTrace.event(Includes.provideApplicationContext(), "library_empty_preserved")
+                    } else {
+                        val fresh = pending.result()
+                        vkRefresh = null
+                        localMergeGeneration++ // invalidate callbacks based on the old VK list
+                        // Keep the previous offline extras visible until a fresh scan succeeds.
+                        // Exclude recordings already represented in the new VK snapshot.
+                        val freshKeys = fresh.mapTo(HashSet(), PersistentShuffle::keyOf)
+                        val previousExtras = audios.filter { it.isLocal && freshKeys.add(PersistentShuffle.keyOf(it)) }
+                        audios.clear()
+                        audios.addAll(fresh)
+                        audios.addAll(previousExtras)
+                        receivedVkCount = fresh.size
+                        endOfContent = true
+                        completeVkSnapshot = true
+                        actualReceived = true
+                        view?.notifyListChanged()
+                        // One transaction replaces the prior complete snapshot only now.
+                        appendJob(kotlinx.coroutines.flow.flow {
+                            snapshotWriteLock.lock()
+                            try {
+                                if (generation == vkRefreshGeneration) {
+                                    Includes.stores.tempStore().addAudios(ownerId, fresh, true).first()
+                                }
+                            } finally {
+                                snapshotWriteLock.unlock()
+                            }
+                            emit(true)
+                        }.hiddenIO())
+                        PlaybackTrace.event(Includes.provideApplicationContext(), "library_committed", "size" to fresh.size)
+                        resolveMissingUrls(fresh)
+                        mergeLocalUnified()
+                        setLoadingNow(false)
+                    }
+                }) { error ->
+                    if (generation == vkRefreshGeneration) {
+                        vkRefresh = null
+                        PlaybackTrace.event(Includes.provideApplicationContext(), "library_refresh_error", "offset" to offset,
+                            "error" to error.javaClass.simpleName)
+                        onListGetError(error)
+                        if (audios.isEmpty()) mergeLocalUnified()
+                    }
+                }
+        )
+    }
+
     fun fireRefresh() {
+        if (isMyAudio && !iSSelectMode && !searcher.isSearchMode) {
+            val generation = ++vkRefreshGeneration
+            vkRefresh = PlaylistSnapshotBuffer(PersistentShuffle::keyOf)
+            setLoadingNow(true)
+            refreshMyMusicPage(generation, 0)
+            return
+        }
         receivedVkCount = 0
         if (searcher.isSearchMode) {
             searcher.reset()

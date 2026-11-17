@@ -396,7 +396,8 @@ class TempDataStorage internal constructor(context: Context) : ITempDataStorage 
                         cv.putNull(AudiosColumns.MAIN_ARTISTS)
                     })
                     cv.put(AudiosColumns.IS_HQ, i.isHq)
-                    insert(AudiosColumns.TABLENAME, null, cv)
+                    // Any failed insert must roll back the replacement transaction.
+                    insertOrThrow(AudiosColumns.TABLENAME, null, cv)
                 }
             }
             emit(true)

@@ -244,6 +244,17 @@ internal object RestoredUrlRefresher {
         }
     }
 
+    /** Invalidate a failed URL so the next loader request re-resolves it. */
+    fun invalidate(audio: Audio) {
+        if (audio.isLocal || audio.isLocalServer) return
+        synchronized(stateLock) {
+            val key = PlaybackResumeStore.key(audio)
+            if (order.none { PlaybackResumeStore.key(it) == key }) order = order + audio
+            stale.add(key)
+            rebuildCandidates.add(key)
+        }
+    }
+
     fun isStale(audio: Audio): Boolean =
         synchronized(stateLock) { stale.contains(PlaybackResumeStore.key(audio)) }
 

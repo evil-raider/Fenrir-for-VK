@@ -20,6 +20,7 @@ import dev.ragnarok.fenrir.upload.UploadDestination.Companion.forRemotePlay
 import dev.ragnarok.fenrir.upload.UploadIntent
 import dev.ragnarok.fenrir.upload.UploadResult
 import dev.ragnarok.fenrir.util.Pair
+import dev.ragnarok.fenrir.util.PersistentShuffle
 import dev.ragnarok.fenrir.util.Utils.findIndexById
 import dev.ragnarok.fenrir.util.Utils.getCauseIfRuntime
 import dev.ragnarok.fenrir.util.Utils.safeCheck
@@ -197,6 +198,8 @@ class AudiosLocalPresenter(accountId: Long, savedInstanceState: Bundle?) :
         origin_audios.clear()
         actualReceived = true
         origin_audios.addAll(data)
+        PersistentShuffle.confirmSnapshot(Includes.provideApplicationContext(),
+            "localaudio_${accountId}_${bucket_id}", origin_audios)
         updateCriteria()
         setLoadingNow(false)
     }
