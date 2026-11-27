@@ -5,6 +5,7 @@ import de.maxr1998.modernpreferences.PreferenceScreen
 import dev.ragnarok.fenrir.model.Audio
 import dev.ragnarok.fenrir.util.PersistentShuffle as P
 import dev.ragnarok.fenrir.util.PlaybackTrace
+import dev.ragnarok.fenrir.util.PlaylistSnapshotBuffer
 import dev.ragnarok.fenrir.util.MyMusicPolicy as M
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -223,6 +224,38 @@ private fun runTests() {
     check(M.shouldTransparentCache("myaudio_7", 7) && !M.shouldTransparentCache(null, 7) &&
         !M.shouldTransparentCache("playlist_7_1", 7) && !M.shouldTransparentCache("myaudio_8", 7))
     assertions += 10
+    // Per-source resume state survives switching to another queue.
+    val permCtx = Context()
+    PlaybackResumeStore.saveQueue(permCtx, tracks, "myaudio_7")
+    PlaybackResumeStore.saveState(permCtx, 5, 123456L, tracks[5], "myaudio_7")
+    val localTrack = Audio(0, isLocal = true, url = "file:///storage/emulated/0/Music/Demo.mp3")
+    PlaybackResumeStore.saveQueue(permCtx, listOf(localTrack), "localaudio_7_1")
+    PlaybackResumeStore.saveState(permCtx, 0, 54321L, localTrack, "localaudio_7_1")
+    val permSrc = PlaybackResumeStore.loadSourceState(permCtx, "myaudio_7")!!
+    check(permSrc.shuffleKey == P.keyOf(tracks[5]) && permSrc.positionMs == 123456L)
+    val localSrc = PlaybackResumeStore.loadSourceState(permCtx, "localaudio_7_1")!!
+    check(localSrc.shuffleKey == P.keyOf(localTrack) && localSrc.positionMs == 54321L)
+    // PlaylistSnapshotBuffer: deduplicates across pages, requires empty end page, and rejects offset regressions.
+    val buf = PlaylistSnapshotBuffer(P::keyOf)
+    buf.addPage(0, listOf(tracks[0], tracks[1]))
+    buf.addPage(2, listOf(tracks[1], tracks[2]))
+    val prematureResult = try {
+        buf.result()
+        false
+    } catch (_: IllegalStateException) {
+        true
+    }
+    check(prematureResult)
+    buf.addPage(4, emptyList<Audio>())
+    check(buf.offset == 4 && buf.result().map { it.id } == listOf(0, 1, 2))
+    val badOffset = try {
+        buf.addPage(1, emptyList<Audio>())
+        false
+    } catch (_: IllegalStateException) {
+        true
+    }
+    check(badOffset)
+    assertions += 4
     println("PASS: $assertions grouped checks; 1000 pass rebuilds, 500 permutation mutations, resume/store/rotation, explicit re-anchor, My Music policy")
     kotlin.system.exitProcess(0) // Production stores deliberately use process-lived executors.
 }

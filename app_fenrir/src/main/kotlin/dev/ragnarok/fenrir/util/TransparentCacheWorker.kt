@@ -99,6 +99,24 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
         notifyManager.cancel(NOTIFICATION_ID)
     }
 
+    @SuppressLint("MissingPermission")
+    private fun notifyError(text: String) {
+        if (!AppPerms.hasNotificationPermissionSimple(applicationContext)) {
+            return
+        }
+        ensureChannel()
+        val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setContentTitle(applicationContext.getString(R.string.error))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setSmallIcon(R.drawable.save)
+            .setColor("#dd0000".toColor())
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setAutoCancel(true)
+            .setOngoing(false)
+        notifyManager.notify(NOTIFICATION_ID, builder.build())
+    }
+
     override fun doWork(): Result {
         val audioRaw = inputData.getByteArray(EXTRA_AUDIO) ?: return Result.failure()
         val audio = MsgPack.decodeFromByteArrayEx(Audio.serializer(), audioRaw)
@@ -110,10 +128,13 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
         val fileName = "$baseName.mp3"
         val target = File(dir, fileName)
 
-        // Файл уже есть на диске — только регистрируем в реестре и тихо выходим.
-        if (target.exists()) {
+        // Файл уже есть и не пустой — только регистрируем в реестре и тихо выходим.
+        if (target.isFile && target.length() >= MIN_VALID_AUDIO_BYTES) {
             MusicPlaybackController.tracksExist.addAudio(fileName)
             return Result.success()
+        }
+        if (target.exists()) {
+            target.delete()
         }
 
         val trackName = ((audio.artist ?: "") + " - " + (audio.title ?: "")).trim()
@@ -136,22 +157,35 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
             }
 
             val url = audio.url
-            if (url.isNullOrEmpty() || audio.isHLS && !FenrirNative.isNativeLoaded) {
+            if (url.isNullOrEmpty() || url.contains("audio_api_unavailable") ||
+                (audio.isHLS && !FenrirNative.isNativeLoaded)
+            ) {
                 // Трек недоступен онлайн (или HLS нечем распаковать) — локальной копии не будет.
                 cancelNotification()
                 MissingTrackNotifier.show(applicationContext, audio)
                 return Result.failure()
             }
 
-            val ok = if (audio.isHLS) {
+            var ok = if (audio.isHLS) {
                 downloadHls(url, dir, baseName, target)
             } else {
-                downloadRaw(url, target)
+                when (downloadAudioRaw(url, target)) {
+                    RAW_OK -> true
+                    RAW_IS_HLS -> FenrirNative.isNativeLoaded && downloadHls(url, dir, baseName, target)
+                    else -> false
+                }
             }
             if (!ok) {
-                cancelNotification()
-                if (!isStopped) {
+                if (target.exists()) {
+                    target.delete()
+                }
+                if (isStopped) {
+                    cancelNotification()
+                } else if (audio.isHLS && !FenrirNative.isNativeLoaded) {
+                    cancelNotification()
                     MissingTrackNotifier.show(applicationContext, audio)
+                } else {
+                    notifyError(trackName)
                 }
                 return Result.failure()
             }
@@ -165,7 +199,7 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
             if (FenrirNative.isNativeLoaded && cover.nonNullNoEmpty()) {
                 notifyProgress(applicationContext.getString(R.string.tag_modified), trackName)
                 val coverFile = File(dir, "$baseName.jpg")
-                if (downloadRaw(cover, coverFile)) {
+                if (downloadRaw(cover, coverFile, isAudio = false) == RAW_OK) {
                     try {
                         val ifGenre =
                             if (audio.genreByID3 != 0) audio.genreByID3.toString() else null
@@ -202,34 +236,52 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
             return Result.success()
         } catch (e: Exception) {
             e.printStackTrace()
-            cancelNotification()
-            MissingTrackNotifier.show(applicationContext, audio)
+            if (target.exists()) {
+                target.delete()
+            }
+            if (isStopped) {
+                cancelNotification()
+            } else {
+                notifyError(trackName)
+            }
             return Result.failure()
         }
     }
 
     /**
-     * HLS-поток: скачиваем M3U8 в .ts и распаковываем в mp3 через нативный TSDemuxer —
-     * та же связка, что в DownloadWorkUtils.doHLSDownload, но без его уведомлений.
+     * HLS-поток: скачиваем M3U8 в .ts и распаковываем во временный .part перед переносом в target.
      */
     private fun downloadHls(url: String, dir: String, baseName: String, target: File): Boolean {
         val ts = File(dir, "$baseName.ts")
+        val part = File(target.parentFile, "${target.name}.part")
         return try {
             if (!M3U8(url, ts.absolutePath).run()) {
                 throw Exception("M3U8 error download")
             }
             if (!TSDemuxer.unpackTS(
                     ts.absolutePath,
-                    target.absolutePath,
+                    part.absolutePath,
                     info = false,
                     print_debug = false
                 )
             ) {
                 throw Exception("Error TSDemuxer")
             }
+            if (!part.isFile || part.length() < MIN_VALID_AUDIO_BYTES) {
+                throw Exception("Invalid HLS output size: ${part.length()}")
+            }
+            if (target.exists()) {
+                target.delete()
+            }
+            if (!part.renameTo(target)) {
+                throw Exception("Failed to move temp file to ${target.name}")
+            }
             true
         } catch (e: Exception) {
             e.printStackTrace()
+            if (part.exists()) {
+                part.delete()
+            }
             if (target.exists()) {
                 target.delete()
             }
@@ -241,43 +293,100 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
         }
     }
 
+    private fun downloadAudioRaw(url: String?, target: File): Int =
+        downloadRaw(url, target, isAudio = true)
+
     /**
-     * Потоковое скачивание url -> target без уведомлений (как в FullAudioSyncWorker).
-     * При ошибке/остановке удаляет частичный файл.
+     * Потоковое скачивание во временный .part-файл с проверкой HTTP Content-Type,
+     * Content-Length, минимального размера и сигнатуры тела перед переименованием в target.
      */
-    private fun downloadRaw(url: String?, target: File): Boolean {
+    private fun downloadRaw(url: String?, target: File, isAudio: Boolean = true): Int {
         if (url.isNullOrEmpty()) {
-            return false
+            return RAW_FAILED
         }
-        var success = false
+        val part = File(target.parentFile, "${target.name}.part")
+        var result = RAW_FAILED
         try {
+            if (part.exists()) {
+                part.delete()
+            }
             val client = Utils.createOkHttp(Constants.DOWNLOAD_TIMEOUT, false).build()
             val request: Request = Request.Builder().url(url).build()
             client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    FileOutputStream(target).use { output ->
-                        BufferedInputStream(response.body.byteStream()).use { input ->
-                            val buffer = ByteArray(80 * 1024)
-                            var len: Int
-                            while (input.read(buffer).also { len = it } != -1) {
-                                if (isStopped) {
-                                    return@use
-                                }
-                                output.write(buffer, 0, len)
+                if (!response.isSuccessful) {
+                    return@use
+                }
+                val contentType = response.header("Content-Type")?.lowercase().orEmpty()
+                if (isAudio) {
+                    if (contentType.contains("mpegurl")) {
+                        result = RAW_IS_HLS
+                        return@use
+                    }
+                    if (contentType.contains("text/html") ||
+                        contentType.contains("application/json") ||
+                        contentType.contains("text/plain")
+                    ) {
+                        return@use
+                    }
+                }
+                val expectedLen = response.body.contentLength()
+                var written = 0L
+                val headBuf = ByteArray(64)
+                var headLen = 0
+                FileOutputStream(part).use { output ->
+                    BufferedInputStream(response.body.byteStream()).use { input ->
+                        val buffer = ByteArray(80 * 1024)
+                        var len: Int
+                        while (input.read(buffer).also { len = it } != -1) {
+                            if (isStopped) {
+                                return@use
                             }
-                            success = true
+                            if (headLen < headBuf.size) {
+                                val take = (headBuf.size - headLen).coerceAtMost(len)
+                                System.arraycopy(buffer, 0, headBuf, headLen, take)
+                                headLen += take
+                            }
+                            output.write(buffer, 0, len)
+                            written += len
                         }
                     }
+                }
+                if (isStopped) {
+                    return@use
+                }
+                if (expectedLen > 0 && written != expectedLen) {
+                    return@use
+                }
+                if (isAudio) {
+                    val head = String(headBuf, 0, headLen).trimStart().lowercase()
+                    if (head.startsWith("#extm3u")) {
+                        result = RAW_IS_HLS
+                        return@use
+                    }
+                    if (written < MIN_VALID_AUDIO_BYTES ||
+                        head.startsWith("<!doctype") ||
+                        head.startsWith("<html") ||
+                        head.startsWith("{")
+                    ) {
+                        return@use
+                    }
+                }
+                if (target.exists()) {
+                    target.delete()
+                }
+                if (part.renameTo(target)) {
+                    result = RAW_OK
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            success = false
+            result = RAW_FAILED
+        } finally {
+            if (part.exists()) {
+                part.delete()
+            }
         }
-        if (!success && target.exists()) {
-            target.delete()
-        }
-        return success
+        return result
     }
 
     companion object {
@@ -285,6 +394,10 @@ class TransparentCacheWorker(context: Context, workerParams: WorkerParameters) :
         private const val NOTIFICATION_ID = 4824
         private const val EXTRA_AUDIO = "audio"
         private const val EXTRA_ACCOUNT = "account"
+        private const val MIN_VALID_AUDIO_BYTES = 4096L
+        private const val RAW_OK = 0
+        private const val RAW_FAILED = 1
+        private const val RAW_IS_HLS = 2
 
         /**
          * Собирает запрос на тихое кэширование одного трека. Ставится в очередь из

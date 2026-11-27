@@ -297,8 +297,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             setForegroundAsync(buildForeground(progressText(done, total)))
             log(
                 "--- [dl " + (i + 1) + "/" + total + "] libIndex=" + gidx +
-                    " owner=" + audio.ownerId + " id=" + audio.id +
-                    " \"" + audio.artist + " - " + audio.title + "\""
+                    " track=" + audio.ownerId + "_" + audio.id
             )
             var reason = "exception"
             try {
@@ -350,7 +349,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         }
 
         val url = audio.url
-        if (url.isNullOrEmpty()) {
+        if (url.isNullOrEmpty() || url.contains("audio_api_unavailable")) {
             // FENRIR-CI (fix ложного «отсутствует локальная копия» для файла во вложенной
             // подпапке): пустая ссылка после дорезолва = трек заблокирован/недоступен онлайн
             // навсегда. Но пользователь мог положить локальную копию вручную, в т.ч. НЕ в корень,
@@ -362,7 +361,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
             if (localCopy != null) {
                 val canonicalName = makeLegalFilename(audio.artist + " - " + audio.title, "mp3")
                 MusicPlaybackController.tracksExist.addAudio(canonicalName)
-                log("    -> url empty, but local copy exists: " + localCopy.absolutePath + " (registered, no notify)")
+                log("    -> url empty, but local copy exists (" + localCopy.length() + " B, registered, no notify)")
                 return "local_exists"
             }
             log("    -> FAIL: url empty after refresh (playback ban -> notify)")
@@ -379,11 +378,25 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         val baseName = makeLegalFilename(audio.artist + " - " + audio.title, null)
         val fileName = "$baseName.mp3"
         val target = File(dir, fileName)
+        if (target.exists() && target.length() < MIN_VALID_AUDIO_BYTES) {
+            target.delete()
+        }
 
         val isHls = audio.isHLS
         log("    downloading: branch=" + (if (isHls) "HLS" else "RAW") + ", urlClass=" + classifyUrl(url))
-        val ok = if (isHls) downloadHls(url, dir, baseName, target) else downloadRaw(url, target)
+        val ok = if (isHls) {
+            downloadHls(url, dir, baseName, target)
+        } else {
+            when (downloadRawChecked(url, target, isAudio = true)) {
+                RAW_OK -> true
+                RAW_IS_HLS -> FenrirNative.isNativeLoaded && downloadHls(url, dir, baseName, target)
+                else -> false
+            }
+        }
         if (!ok) {
+            if (target.exists()) {
+                target.delete()
+            }
             if (!isStopped) {
                 log("    -> FAIL: download returned false (branch=" + (if (isHls) "HLS" else "RAW") + ") (no notify, will retry)")
             } else {
@@ -399,7 +412,7 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         )
         if (FenrirNative.isNativeLoaded && cover.nonNullNoEmpty()) {
             val coverFile = File(dir, "$baseName.jpg")
-            if (downloadRaw(cover, coverFile)) {
+            if (downloadRawChecked(cover, coverFile, isAudio = false) == RAW_OK) {
                 try {
                     val ifGenre = if (audio.genreByID3 != 0) audio.genreByID3.toString() else null
                     val commentText = Audio.AudioCommentTag(audio.ownerId, audio.id).toText()
@@ -432,29 +445,42 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
                 Uri.fromFile(target)
             )
         )
-        log("    -> OK: saved " + fileName)
+        log("    -> OK: saved " + target.length() + " B")
         return "ok"
     }
 
     private fun downloadHls(url: String, dir: String, baseName: String, target: File): Boolean {
         val ts = File(dir, "$baseName.ts")
+        val part = File(target.parentFile, "${target.name}.part")
         return try {
             if (!M3U8(url, ts.absolutePath).run()) {
                 throw Exception("M3U8 error download")
             }
             if (!TSDemuxer.unpackTS(
                     ts.absolutePath,
-                    target.absolutePath,
+                    part.absolutePath,
                     info = false,
                     print_debug = false
                 )
             ) {
                 throw Exception("Error TSDemuxer")
             }
+            if (!part.isFile || part.length() < MIN_VALID_AUDIO_BYTES) {
+                throw Exception("Invalid HLS size: ${part.length()}")
+            }
+            if (target.exists()) {
+                target.delete()
+            }
+            if (!part.renameTo(target)) {
+                throw Exception("Failed to move temp HLS file")
+            }
             true
         } catch (e: Exception) {
             log("      downloadHls exception: " + e.message)
             e.printStackTrace()
+            if (part.exists()) {
+                part.delete()
+            }
             if (target.exists()) {
                 target.delete()
             }
@@ -466,44 +492,99 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         }
     }
 
-    private fun downloadRaw(url: String?, target: File): Boolean {
+    private fun downloadRawChecked(url: String?, target: File, isAudio: Boolean): Int {
         if (url.isNullOrEmpty()) {
             log("      downloadRaw: url null/empty")
-            return false
+            return RAW_FAILED
         }
-        var success = false
+        val part = File(target.parentFile, "${target.name}.part")
+        var result = RAW_FAILED
         try {
+            if (part.exists()) {
+                part.delete()
+            }
             val client = Utils.createOkHttp(Constants.DOWNLOAD_TIMEOUT, false).build()
             val request: Request = Request.Builder().url(url).build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     log("      downloadRaw: HTTP " + response.code + " " + response.message + " urlClass=" + classifyUrl(url))
+                    return@use
                 }
-                if (response.isSuccessful) {
-                    FileOutputStream(target).use { output ->
-                        BufferedInputStream(response.body.byteStream()).use { input ->
-                            val buffer = ByteArray(80 * 1024)
-                            var len: Int
-                            while (input.read(buffer).also { len = it } != -1) {
-                                if (isStopped) {
-                                    return@use
-                                }
-                                output.write(buffer, 0, len)
+                val contentType = response.header("Content-Type")?.lowercase().orEmpty()
+                if (isAudio) {
+                    if (contentType.contains("mpegurl")) {
+                        result = RAW_IS_HLS
+                        return@use
+                    }
+                    if (contentType.contains("text/html") ||
+                        contentType.contains("application/json") ||
+                        contentType.contains("text/plain")
+                    ) {
+                        log("      downloadRaw: unexpected Content-Type=$contentType")
+                        return@use
+                    }
+                }
+                val expectedLen = response.body.contentLength()
+                var written = 0L
+                val headBuf = ByteArray(64)
+                var headLen = 0
+                FileOutputStream(part).use { output ->
+                    BufferedInputStream(response.body.byteStream()).use { input ->
+                        val buffer = ByteArray(80 * 1024)
+                        var len: Int
+                        while (input.read(buffer).also { len = it } != -1) {
+                            if (isStopped) {
+                                return@use
                             }
-                            success = true
+                            if (headLen < headBuf.size) {
+                                val take = (headBuf.size - headLen).coerceAtMost(len)
+                                System.arraycopy(buffer, 0, headBuf, headLen, take)
+                                headLen += take
+                            }
+                            output.write(buffer, 0, len)
+                            written += len
                         }
                     }
+                }
+                if (isStopped) {
+                    return@use
+                }
+                if (expectedLen > 0 && written != expectedLen) {
+                    log("      downloadRaw: truncated $written != $expectedLen")
+                    return@use
+                }
+                if (isAudio) {
+                    val head = String(headBuf, 0, headLen).trimStart().lowercase()
+                    if (head.startsWith("#extm3u")) {
+                        result = RAW_IS_HLS
+                        return@use
+                    }
+                    if (written < MIN_VALID_AUDIO_BYTES ||
+                        head.startsWith("<!doctype") ||
+                        head.startsWith("<html") ||
+                        head.startsWith("{")
+                    ) {
+                        log("      downloadRaw: invalid audio payload ($written B)")
+                        return@use
+                    }
+                }
+                if (target.exists()) {
+                    target.delete()
+                }
+                if (part.renameTo(target)) {
+                    result = RAW_OK
                 }
             }
         } catch (e: Exception) {
             log("      downloadRaw exception: " + e.message)
             e.printStackTrace()
-            success = false
+            result = RAW_FAILED
+        } finally {
+            if (part.exists()) {
+                part.delete()
+            }
         }
-        if (!success && target.exists()) {
-            target.delete()
-        }
-        return success
+        return result
     }
 
     companion object {
@@ -513,6 +594,10 @@ class FullAudioSyncWorker(context: Context, workerParams: WorkerParameters) :
         private const val MAX_PAGES = 1000
         private const val NOTIFICATION_FULL_SYNC = 4823
         private const val FOREGROUND_CHANNEL_ID = "worker_channel"
+        private const val MIN_VALID_AUDIO_BYTES = 4096L
+        private const val RAW_OK = 0
+        private const val RAW_FAILED = 1
+        private const val RAW_IS_HLS = 2
         private const val TARGET_HOUR = 5
         private const val INPUT_KEY_MANUAL = "manual"
 

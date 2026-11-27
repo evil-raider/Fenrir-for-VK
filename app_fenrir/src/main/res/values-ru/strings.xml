@@ -1744,4 +1744,5 @@
     <string name="audios_tab_my_music">Моя музыка+оффлайн</string>
     <string name="share_playback_debug">Отправить диагностику плеера</string>
     <string name="playback_debug_export_failed">Не удалось экспортировать диагностику плеера</string>
+    <string name="resume_queue">Продолжить очередь с места остановки</string>
 </resources>

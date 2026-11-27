@@ -1999,4 +1999,5 @@
     <string name="audios_tab_my_music">My music+offline</string>
     <string name="share_playback_debug">Share player diagnostics</string>
     <string name="playback_debug_export_failed">Could not export player diagnostics</string>
+    <string name="resume_queue">Continue queue from last position</string>
 </resources>

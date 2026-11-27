@@ -14,6 +14,7 @@ import dev.ragnarok.fenrir.media.music.MusicPlaybackController
 import dev.ragnarok.fenrir.media.music.MusicPlaybackService.Companion.appendToPlayListIfCurrent
 import dev.ragnarok.fenrir.media.music.MusicPlaybackService.Companion.startForPlayList
 import dev.ragnarok.fenrir.media.music.MusicPlaybackService.Companion.syncPlayListIfCurrent
+import dev.ragnarok.fenrir.media.music.PlaybackResumeStore
 import dev.ragnarok.fenrir.model.Audio
 import dev.ragnarok.fenrir.model.AudioPlaylist
 import dev.ragnarok.fenrir.nonNullNoEmpty
@@ -119,7 +120,7 @@ class AudiosPresenter(
                                 // FENRIR-CI: кэш мог содержать треки без url — резолвим их.
                                 resolveMissingUrls(it)
                                 // Обновляем целый снимок в фоне, не удаляя список из кэша.
-                                if (isMyAudio) {
+                                if (isMyAudio || ownerId != accountId) {
                                     fireRefresh()
                                 }
                             }
@@ -143,7 +144,7 @@ class AudiosPresenter(
     }
 
     private fun requestNext() {
-        if (isMyAudio && !iSSelectMode) {
+        if (!searcher.isSearchMode) {
             if (!loadingNow) fireRefresh()
             return
         }
@@ -477,14 +478,80 @@ class AudiosPresenter(
         sleep_search(q?.trim())
     }
 
-    private fun refreshMyMusicPage(generation: Long, offset: Int) {
+    fun resumePermanentQueue(context: Context) {
+        if (!isMyAudio || iSSelectMode) {
+            return
+        }
+        val appContext = context.applicationContext
+        val queueId = MyMusicPolicy.myAudioQueueId(accountId)
+        appendJob(
+            kotlinx.coroutines.flow.flow {
+                val src = PlaybackResumeStore.loadSourceState(appContext, queueId)
+                val saved = PlaybackResumeStore.loadSnapshot(appContext)
+                emit(Pair(src, saved))
+            }.fromIOToMain({ (src, saved) ->
+                val targetKey = src?.shuffleKey
+                    ?: if (saved?.queueId == queueId) {
+                        saved.audios.getOrNull(saved.index)?.let(PersistentShuffle::keyOf)
+                    } else {
+                        null
+                    }
+                val targetPosMs = src?.positionMs
+                    ?: if (saved?.queueId == queueId) saved.positionMs else 0L
+                val savedQueueForMyAudio =
+                    if (saved?.queueId == queueId && saved.audios.isNotEmpty()) {
+                        saved.audios
+                    } else {
+                        null
+                    }
+                val targetList: ArrayList<Audio> = when {
+                    audios.isNotEmpty() && (targetKey == null ||
+                        audios.any { PersistentShuffle.keyOf(it) == targetKey } ||
+                        savedQueueForMyAudio == null ||
+                        savedQueueForMyAudio.none { PersistentShuffle.keyOf(it) == targetKey }) ->
+                        ArrayList(audios)
+                    savedQueueForMyAudio != null -> ArrayList(savedQueueForMyAudio)
+                    else -> ArrayList()
+                }
+                val foundIndex = if (targetKey != null && targetList.isNotEmpty()) {
+                    targetList.indexOfFirst { PersistentShuffle.keyOf(it) == targetKey }
+                } else {
+                    -1
+                }
+                val startIndex = if (foundIndex >= 0) foundIndex else 0
+                val startPosMs = if (foundIndex >= 0) targetPosMs.coerceAtLeast(0L) else 0L
+                if (targetList.isEmpty() &&
+                    !MusicPlaybackController.isInitialized &&
+                    !MusicPlaybackController.isPreparing
+                ) {
+                    view?.customToast?.showToast(R.string.null_audio)
+                    return@fromIOToMain
+                }
+                startForPlayList(
+                    context,
+                    targetList,
+                    startIndex,
+                    queueId,
+                    startPositionMs = startPosMs,
+                    resumeIfSame = true
+                )
+                if (!Settings.get().main().isShow_mini_player) {
+                    getPlayerPlace(accountId).tryOpenWith(context)
+                }
+            }) { t -> showError(getCauseIfRuntime(t)) }
+        )
+    }
+
+    private fun refreshVkSnapshotPage(generation: Long, offset: Int) {
         audioListDisposable.add(
             audioInteractor[accountId, playlistId, ownerId, offset, GET_COUNT, accessKey]
                 .fromIOToMain({ page ->
                     if (generation != vkRefreshGeneration) return@fromIOToMain
                     val pending = vkRefresh ?: return@fromIOToMain
-                    PlaybackTrace.event(Includes.provideApplicationContext(), "library_page",
-                        "offset" to offset, "size" to page.size)
+                    if (isMyAudio && !iSSelectMode) {
+                        PlaybackTrace.event(Includes.provideApplicationContext(), "library_page",
+                            "offset" to offset, "size" to page.size)
+                    }
                     try {
                         pending.addPage(offset, page)
                     } catch (error: IllegalStateException) {
@@ -493,12 +560,14 @@ class AudiosPresenter(
                         return@fromIOToMain
                     }
                     if (page.isNotEmpty()) {
-                        refreshMyMusicPage(generation, pending.offset)
+                        refreshVkSnapshotPage(generation, pending.offset)
                     } else if (offset == 0 && audios.any { !it.isLocal }) {
                         // A first empty page is ambiguous; don't erase a known snapshot.
                         vkRefresh = null
                         setLoadingNow(false)
-                        PlaybackTrace.event(Includes.provideApplicationContext(), "library_empty_preserved")
+                        if (isMyAudio && !iSSelectMode) {
+                            PlaybackTrace.event(Includes.provideApplicationContext(), "library_empty_preserved")
+                        }
                     } else {
                         val fresh = pending.result()
                         vkRefresh = null
@@ -506,7 +575,11 @@ class AudiosPresenter(
                         // Keep the previous offline extras visible until a fresh scan succeeds.
                         // Exclude recordings already represented in the new VK snapshot.
                         val freshKeys = fresh.mapTo(HashSet(), PersistentShuffle::keyOf)
-                        val previousExtras = audios.filter { it.isLocal && freshKeys.add(PersistentShuffle.keyOf(it)) }
+                        val previousExtras = if (isMyAudio && !iSSelectMode) {
+                            audios.filter { it.isLocal && freshKeys.add(PersistentShuffle.keyOf(it)) }
+                        } else {
+                            emptyList()
+                        }
                         audios.clear()
                         audios.addAll(fresh)
                         audios.addAll(previousExtras)
@@ -515,19 +588,38 @@ class AudiosPresenter(
                         completeVkSnapshot = true
                         actualReceived = true
                         view?.notifyListChanged()
-                        // One transaction replaces the prior complete snapshot only now.
-                        appendJob(kotlinx.coroutines.flow.flow {
-                            snapshotWriteLock.lock()
-                            try {
-                                if (generation == vkRefreshGeneration) {
-                                    Includes.stores.tempStore().addAudios(ownerId, fresh, true).first()
+                        if (playlistId == null && !iSSelectMode) {
+                            // One transaction replaces the prior complete snapshot only now.
+                            appendJob(kotlinx.coroutines.flow.flow {
+                                snapshotWriteLock.lock()
+                                try {
+                                    if (generation == vkRefreshGeneration) {
+                                        Includes.stores.tempStore().addAudios(ownerId, fresh, true).first()
+                                    }
+                                } finally {
+                                    snapshotWriteLock.unlock()
                                 }
-                            } finally {
-                                snapshotWriteLock.unlock()
+                                emit(true)
+                            }.hiddenIO())
+                        }
+                        if (isMyAudio && !iSSelectMode) {
+                            PlaybackTrace.event(Includes.provideApplicationContext(), "library_committed", "size" to fresh.size)
+                        } else if (!iSSelectMode) {
+                            PersistentShuffle.confirmSnapshot(
+                                Includes.provideApplicationContext(),
+                                playbackQueueId,
+                                audios
+                            )
+                        }
+                        if (needDeadHelper) {
+                            for (i in fresh) {
+                                if (i.url.isNullOrEmpty() || i.url?.contains("audio_api_unavailable") == true) {
+                                    needDeadHelper = false
+                                    view?.showAudioDeadHelper()
+                                    break
+                                }
                             }
-                            emit(true)
-                        }.hiddenIO())
-                        PlaybackTrace.event(Includes.provideApplicationContext(), "library_committed", "size" to fresh.size)
+                        }
                         resolveMissingUrls(fresh)
                         mergeLocalUnified()
                         setLoadingNow(false)
@@ -535,8 +627,10 @@ class AudiosPresenter(
                 }) { error ->
                     if (generation == vkRefreshGeneration) {
                         vkRefresh = null
-                        PlaybackTrace.event(Includes.provideApplicationContext(), "library_refresh_error", "offset" to offset,
-                            "error" to error.javaClass.simpleName)
+                        if (isMyAudio && !iSSelectMode) {
+                            PlaybackTrace.event(Includes.provideApplicationContext(), "library_refresh_error", "offset" to offset,
+                                "error" to error.javaClass.simpleName)
+                        }
                         onListGetError(error)
                         if (audios.isEmpty()) mergeLocalUnified()
                     }
@@ -545,13 +639,6 @@ class AudiosPresenter(
     }
 
     fun fireRefresh() {
-        if (isMyAudio && !iSSelectMode && !searcher.isSearchMode) {
-            val generation = ++vkRefreshGeneration
-            vkRefresh = PlaylistSnapshotBuffer(PersistentShuffle::keyOf)
-            setLoadingNow(true)
-            refreshMyMusicPage(generation, 0)
-            return
-        }
         receivedVkCount = 0
         if (searcher.isSearchMode) {
             searcher.reset()
@@ -570,7 +657,10 @@ class AudiosPresenter(
                             )
                         })
             }
-            requestList(0, playlistId)
+            val generation = ++vkRefreshGeneration
+            vkRefresh = PlaylistSnapshotBuffer(PersistentShuffle::keyOf)
+            setLoadingNow(true)
+            refreshVkSnapshotPage(generation, 0)
         }
     }
 

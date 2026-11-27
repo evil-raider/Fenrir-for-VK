@@ -13,6 +13,8 @@ import dev.ragnarok.fenrir.nonNullNoEmpty
 import dev.ragnarok.fenrir.place.PlaceFactory.getPlayerPlace
 import dev.ragnarok.fenrir.settings.Settings
 import dev.ragnarok.fenrir.util.DownloadWorkUtils.TrackIsDownloaded
+import dev.ragnarok.fenrir.util.PersistentShuffle
+import dev.ragnarok.fenrir.util.PlaylistSnapshotBuffer
 import dev.ragnarok.fenrir.util.Utils.getCauseIfRuntime
 import dev.ragnarok.fenrir.util.coroutines.CompositeJob
 import dev.ragnarok.fenrir.util.coroutines.CoroutinesUtils.fromIOToMain
@@ -29,6 +31,8 @@ class AudiosByArtistPresenter(
     private var actualReceived = false
     private var loadingNow = false
     private var endOfContent = false
+    @Volatile private var loadGeneration = 0L
+    private var stagedBuffer: PlaylistSnapshotBuffer<Audio>? = null
     val isMyAudio: Boolean
         get() = false
 
@@ -49,13 +53,12 @@ class AudiosByArtistPresenter(
     }
 
     private fun requestNext() {
-        setLoadingNow(true)
-        val offset = audios.size
-        requestList(offset)
+        if (!loadingNow) {
+            fireRefresh()
+        }
     }
 
-    private fun requestList(offset: Int) {
-        setLoadingNow(true)
+    private fun requestListPage(generation: Long, offset: Int) {
         audioListDisposable.add(
             audioInteractor.getAudiosByArtist(
                 accountId,
@@ -63,33 +66,37 @@ class AudiosByArtistPresenter(
                 offset,
                 GET_COUNT
             )
-                .fromIOToMain({
-                    if (offset == 0) {
-                        onListReceived(it)
-                    } else {
-                        onNextListReceived(it)
+                .fromIOToMain({ page ->
+                    if (generation != loadGeneration) return@fromIOToMain
+                    val pending = stagedBuffer ?: return@fromIOToMain
+                    try {
+                        pending.addPage(offset, page)
+                    } catch (error: IllegalStateException) {
+                        stagedBuffer = null
+                        onListGetError(error)
+                        return@fromIOToMain
                     }
-                }) { t -> onListGetError(t) })
-    }
-
-    private fun onNextListReceived(next: List<Audio>) {
-        val startOwnSize = audios.size
-        audios.addAll(next)
-        endOfContent = next.isEmpty()
-        setLoadingNow(false)
-        view?.notifyDataAdded(
-            startOwnSize,
-            next.size
-        )
-    }
-
-    private fun onListReceived(data: List<Audio>) {
-        audios.clear()
-        audios.addAll(data)
-        endOfContent = data.isEmpty()
-        actualReceived = true
-        setLoadingNow(false)
-        view?.notifyListChanged()
+                    if (page.isNotEmpty()) {
+                        requestListPage(generation, pending.offset)
+                    } else if (offset == 0 && audios.isNotEmpty()) {
+                        stagedBuffer = null
+                        setLoadingNow(false)
+                    } else {
+                        val fresh = pending.result()
+                        stagedBuffer = null
+                        audios.clear()
+                        audios.addAll(fresh)
+                        endOfContent = true
+                        actualReceived = true
+                        setLoadingNow(false)
+                        view?.notifyListChanged()
+                    }
+                }) { t ->
+                    if (generation == loadGeneration) {
+                        stagedBuffer = null
+                        onListGetError(t)
+                    }
+                })
     }
 
     fun playAudio(context: Context, position: Int) {
@@ -160,8 +167,10 @@ class AudiosByArtistPresenter(
     }
 
     fun fireRefresh() {
-        audioListDisposable.clear()
-        requestList(0)
+        val generation = ++loadGeneration
+        stagedBuffer = PlaylistSnapshotBuffer(PersistentShuffle::keyOf)
+        setLoadingNow(true)
+        requestListPage(generation, 0)
     }
 
     fun onAdd(album: AudioPlaylist) {

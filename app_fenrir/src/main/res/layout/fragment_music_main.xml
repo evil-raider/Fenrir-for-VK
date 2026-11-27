@@ -68,4 +68,16 @@
         android:contentDescription="@null"
         android:src="@drawable/save"
         app:layout_behavior="dev.ragnarok.fenrir.view.FABBehavior" />
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/resume_queue_button"
+        style="@style/Theme.FloatingActionButtonSmallSecondary"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="@dimen/fab_margin"
+        android:contentDescription="@string/resume_queue"
+        android:src="@drawable/play"
+        android:visibility="gone"
+        app:layout_behavior="dev.ragnarok.fenrir.view.FABBehavior" />
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

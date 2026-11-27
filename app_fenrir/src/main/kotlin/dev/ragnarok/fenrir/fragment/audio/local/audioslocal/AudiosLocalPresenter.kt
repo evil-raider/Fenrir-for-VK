@@ -205,8 +205,10 @@ class AudiosLocalPresenter(accountId: Long, savedInstanceState: Bundle?) :
     }
 
     fun playAudio(context: Context, position: Int) {
-        // FENRIR-CI: «На устройстве» — свой персистентный проход шафла на источник (папка/альбом).
-        startForPlayList(context, audios, position, "localaudio_${accountId}_${bucket_id}")
+        // FENRIR-CI: «На устройстве» — персистентный шафл только для всей папки/альбома;
+        // временный поиск (query != null) воспроизводится как эфемерная очередь (queueId = null).
+        val queueId = if (query.isNullOrEmpty()) "localaudio_${accountId}_${bucket_id}" else null
+        startForPlayList(context, audios, position, queueId)
         if (!Settings.get().main().isShow_mini_player) getPlayerPlace(accountId).tryOpenWith(
             context
         )

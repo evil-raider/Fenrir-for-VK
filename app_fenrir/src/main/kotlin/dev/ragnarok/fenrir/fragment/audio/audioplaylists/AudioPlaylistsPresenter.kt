@@ -16,6 +16,7 @@ import dev.ragnarok.fenrir.model.AudioPlaylist
 import dev.ragnarok.fenrir.nonNullNoEmpty
 import dev.ragnarok.fenrir.settings.Settings
 import dev.ragnarok.fenrir.util.FindAtWithContent
+import dev.ragnarok.fenrir.util.PlaylistSnapshotBuffer
 import dev.ragnarok.fenrir.util.Utils.getCauseIfRuntime
 import dev.ragnarok.fenrir.util.Utils.isValueAssigned
 import dev.ragnarok.fenrir.util.Utils.safeCheck
@@ -34,27 +35,62 @@ class AudioPlaylistsPresenter(accountId: Long, val owner_id: Long, savedInstance
     private val searcher: FindPlaylist = FindPlaylist(compositeJob)
     private var actualDataDisposable = CancelableJob()
     private var pending_to_add: AudioPlaylist? = null
-    private var Foffset = 0
     private var endOfContent = false
     private var actualDataLoading = false
     private var doAudioLoadTabs = false
     private var actualDataReceived = false
+    @Volatile private var playlistsGeneration = 0L
+    private var stagedPlaylists: PlaylistSnapshotBuffer<AudioPlaylist>? = null
     override fun onGuiCreated(viewHost: IAudioPlaylistsView) {
         super.onGuiCreated(viewHost)
         viewHost.displayData(playlists)
     }
 
-    private fun loadActualData(offset: Int) {
+    private fun loadActualData(@Suppress("UNUSED_PARAMETER") offset: Int) {
+        val generation = ++playlistsGeneration
+        stagedPlaylists = PlaylistSnapshotBuffer { "${it.owner_id}_${it.id}" }
         actualDataLoading = true
         resolveRefreshingView()
+        loadPlaylistsPage(generation, 0)
+    }
+
+    private fun loadPlaylistsPage(generation: Long, offset: Int) {
         appendJob(
             fInteractor.getPlaylists(accountId, owner_id, offset, GET_COUNT)
                 .fromIOToMain({ data ->
-                    onActualDataReceived(
-                        offset,
-                        data
-                    )
-                }) { t -> onActualDataGetError(t) })
+                    if (generation != playlistsGeneration) return@fromIOToMain
+                    val pending = stagedPlaylists ?: return@fromIOToMain
+                    try {
+                        pending.addPage(offset, data)
+                    } catch (error: IllegalStateException) {
+                        stagedPlaylists = null
+                        onActualDataGetError(error)
+                        return@fromIOToMain
+                    }
+                    if (data.isNotEmpty()) {
+                        loadPlaylistsPage(generation, pending.offset)
+                    } else if (offset == 0 && playlists.isNotEmpty()) {
+                        stagedPlaylists = null
+                        actualDataLoading = false
+                        resolveRefreshingView()
+                    } else {
+                        val fresh = pending.result()
+                        stagedPlaylists = null
+                        actualDataReceived = true
+                        actualDataLoading = false
+                        endOfContent = true
+                        playlists.clear()
+                        playlists.addAll(addon)
+                        playlists.addAll(fresh)
+                        view?.notifyDataSetChanged()
+                        resolveRefreshingView()
+                    }
+                }) { t ->
+                    if (generation == playlistsGeneration) {
+                        stagedPlaylists = null
+                        onActualDataGetError(t)
+                    }
+                })
     }
 
     internal fun onActualDataGetError(t: Throwable) {
@@ -62,27 +98,6 @@ class AudioPlaylistsPresenter(accountId: Long, val owner_id: Long, savedInstance
         showError(
             getCauseIfRuntime(t)
         )
-        resolveRefreshingView()
-    }
-
-    private fun onActualDataReceived(offset: Int, data: List<AudioPlaylist>) {
-        actualDataReceived = true
-        Foffset = offset + GET_COUNT
-        actualDataLoading = false
-        endOfContent = data.isEmpty()
-        if (offset == 0) {
-            playlists.clear()
-            playlists.addAll(addon)
-            playlists.addAll(data)
-            view?.notifyDataSetChanged()
-        } else {
-            val startSize = playlists.size
-            playlists.addAll(data)
-            view?.notifyDataAdded(
-                startSize,
-                data.size
-            )
-        }
         resolveRefreshingView()
     }
 
@@ -162,7 +177,7 @@ class AudioPlaylistsPresenter(accountId: Long, val owner_id: Long, savedInstance
             if (searcher.isSearchMode) {
                 searcher.do_search()
             } else if (!endOfContent) {
-                loadActualData(Foffset)
+                loadActualData(0)
             }
             return false
         }

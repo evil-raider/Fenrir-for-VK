@@ -4,8 +4,10 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.util.AtomicFile
+import dev.ragnarok.fenrir.util.PersistentShuffle
 import dev.ragnarok.fenrir.util.PlaybackTrace
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -45,6 +47,9 @@ internal object PlaybackResumeStore {
     private const val KEY_INDEX = "index"
     private const val KEY_POSITION = "position"
     private const val KEY_AUDIO_KEY = "audio_key"
+    private const val KEY_SRC_SHUFFLE_PREFIX = "src_skey_"
+    private const val KEY_SRC_RESUME_PREFIX = "src_rkey_"
+    private const val KEY_SRC_POS_PREFIX = "src_pos_"
 
     private val io = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -60,6 +65,12 @@ internal object PlaybackResumeStore {
         val index: Int,
         val positionMs: Long,
         val queueId: String?
+    )
+
+    class SourceState(
+        val shuffleKey: String,
+        val resumeKey: String?,
+        val positionMs: Long
     )
 
     fun key(audio: Audio): String =
@@ -118,33 +129,55 @@ internal object PlaybackResumeStore {
     }
 
     /** Дёшево, можно звать часто (смена трека, пауза, уничтожение сервиса). */
-    fun saveState(context: Context, index: Int, positionMs: Long, audio: Audio?) {
+    fun saveState(context: Context, index: Int, positionMs: Long, audio: Audio?, queueId: String? = null) {
         if (index < 0 || audio == null) {
             return
         }
+        val safePos = positionMs.coerceAtLeast(0)
         PlaybackTrace.event(context, "resume_state", "index" to index,
             "positionMs" to positionMs, "track" to PlaybackTrace.audio(audio))
         prefs(context.applicationContext).edit {
             putInt(KEY_INDEX, index)
-            putLong(KEY_POSITION, positionMs.coerceAtLeast(0))
+            putLong(KEY_POSITION, safePos)
             putString(KEY_AUDIO_KEY, key(audio))
+            if (!queueId.isNullOrEmpty()) {
+                putString(KEY_SRC_SHUFFLE_PREFIX + queueId, PersistentShuffle.keyOf(audio))
+                putString(KEY_SRC_RESUME_PREFIX + queueId, key(audio))
+                putLong(KEY_SRC_POS_PREFIX + queueId, safePos)
+            }
         }
+    }
+
+    /** Возвращает последнюю сохранённую позицию для конкретного персистентного источника (например, «Моей музыки»). */
+    fun loadSourceState(context: Context, queueId: String?): SourceState? {
+        if (queueId.isNullOrEmpty()) {
+            return null
+        }
+        val p = prefs(context.applicationContext)
+        val skey = p.getString(KEY_SRC_SHUFFLE_PREFIX + queueId, null) ?: return null
+        val rkey = p.getString(KEY_SRC_RESUME_PREFIX + queueId, null)
+        val pos = p.getLong(KEY_SRC_POS_PREFIX + queueId, 0L).coerceAtLeast(0L)
+        return SourceState(skey, rkey, pos)
     }
 
     /** Читает снимок в фоне (после всех ожидающих записей), результат — на главном потоке. */
     fun loadAsync(context: Context, callback: (Snapshot?) -> Unit) {
         val app = context.applicationContext
         io.execute {
-            val snapshot = try {
-                load(app)
-            } catch (e: Throwable) {
-                PlaybackTrace.event(app, "resume_load_failed", "error" to e.javaClass.simpleName)
-                Log.e(TAG, "load failed: ${e.javaClass.simpleName}")
-                null
-            }
+            val snapshot = loadSnapshot(app)
             mainHandler.post { callback(snapshot) }
         }
     }
+
+    internal fun loadSnapshot(context: Context): Snapshot? =
+        try {
+            load(context.applicationContext)
+        } catch (e: Throwable) {
+            PlaybackTrace.event(context.applicationContext, "resume_load_failed",
+                "error" to e.javaClass.simpleName)
+            Log.e(TAG, "load failed: ${e.javaClass.simpleName}")
+            null
+        }
 
     private fun load(context: Context): Snapshot? {
         val p = prefs(context)
@@ -204,6 +237,7 @@ internal object RestoredUrlRefresher {
     private const val TAG = "RestoredUrlRefresher"
     private const val BATCH = 50
     private const val TIMEOUT_MS = 10_000L
+    private const val FAILURE_COOLDOWN_MS = 30_000L
     private const val PLACEHOLDER_PREFIX = "https://fenrir-restore.invalid/"
 
     private val stateLock = Any()
@@ -211,6 +245,8 @@ internal object RestoredUrlRefresher {
     private var order: List<Audio> = emptyList()
     private val stale = HashSet<String>()
     private val rebuildCandidates = HashSet<String>()
+    @Volatile
+    private var lastNetworkFailureMs = 0L
     private val audioInteractor: IAudioInteractor by lazy { InteractorFactory.createAudioInteractor() }
 
     private fun needsRefresh(audio: Audio): Boolean {
@@ -226,6 +262,7 @@ internal object RestoredUrlRefresher {
             order = audios
             stale.clear()
             rebuildCandidates.clear()
+            lastNetworkFailureMs = 0L
             for (a in audios) {
                 if (needsRefresh(a)) {
                     val k = PlaybackResumeStore.key(a)
@@ -241,6 +278,7 @@ internal object RestoredUrlRefresher {
             order = emptyList()
             stale.clear()
             rebuildCandidates.clear()
+            lastNetworkFailureMs = 0L
         }
     }
 
@@ -252,6 +290,7 @@ internal object RestoredUrlRefresher {
             if (order.none { PlaybackResumeStore.key(it) == key }) order = order + audio
             stale.add(key)
             rebuildCandidates.add(key)
+            lastNetworkFailureMs = 0L
         }
     }
 
@@ -269,6 +308,10 @@ internal object RestoredUrlRefresher {
     /** Блокирующий вызов — только с фонового потока (загрузчик ExoPlayer). */
     fun refreshBlocking(target: Audio) {
         synchronized(networkLock) {
+            val now = SystemClock.elapsedRealtime()
+            if (lastNetworkFailureMs > 0L && now - lastNetworkFailureMs < FAILURE_COOLDOWN_MS) {
+                return
+            }
             val batch = ArrayList<Audio>(BATCH)
             synchronized(stateLock) {
                 val targetKey = PlaybackResumeStore.key(target)
@@ -289,6 +332,7 @@ internal object RestoredUrlRefresher {
                     }
                 }
             }
+            var succeeded = false
             try {
                 val accountId = Settings.get().accounts().current
                 val fresh = runBlocking {
@@ -301,6 +345,8 @@ internal object RestoredUrlRefresher {
                     }
                 }
                 if (fresh != null) {
+                    succeeded = true
+                    lastNetworkFailureMs = 0L
                     for (r in fresh) {
                         val url = r.url
                         if (url.isNullOrEmpty()) {
@@ -308,14 +354,20 @@ internal object RestoredUrlRefresher {
                         }
                         batch.firstOrNull { it.id == r.id && it.ownerId == r.ownerId }?.setUrl(url)
                     }
+                } else {
+                    lastNetworkFailureMs = SystemClock.elapsedRealtime()
                 }
             } catch (e: Throwable) {
+                lastNetworkFailureMs = SystemClock.elapsedRealtime()
                 Log.e(TAG, "refresh failed: ${e.message}")
             } finally {
-                // Даже при ошибке сети больше не пытаемся: иначе офлайн каждый трек ждал бы таймаут.
-                synchronized(stateLock) {
-                    for (a in batch) {
-                        stale.remove(PlaybackResumeStore.key(a))
+                // Only clear stale flags after a real server response; offline/timeouts keep
+                // remaining tracks eligible once connectivity returns after cooldown.
+                if (succeeded) {
+                    synchronized(stateLock) {
+                        for (a in batch) {
+                            stale.remove(PlaybackResumeStore.key(a))
+                        }
                     }
                 }
             }

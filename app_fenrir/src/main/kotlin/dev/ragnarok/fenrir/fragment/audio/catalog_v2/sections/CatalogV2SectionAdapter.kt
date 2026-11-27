@@ -1148,17 +1148,14 @@ class CatalogV2SectionAdapter(
                 MusicPlaybackController.stop()
             }
         } else {
-            val op = ArrayList<Audio>(MusicPlaybackService.MAX_QUEUE_SIZE)
-            val half = MusicPlaybackService.MAX_QUEUE_SIZE / 2
-            val st = (position - half).coerceAtLeast(0)
-            val en = (position + half).coerceAtMost(realItemCount)
-            for (i in st until en) {
+            val op = ArrayList<Audio>(realItemCount)
+            for (i in 0 until realItemCount) {
                 if (getItem(i).getModelType() == AbsModelType.MODEL_AUDIO) {
                     op.add(getItem(i) as Audio)
                 }
             }
             MusicPlaybackService.startForPlayList(
-                mContext, op, op.indexOf(audio)
+                mContext, op, op.indexOf(audio).coerceAtLeast(0)
             )
             if (!Settings.get().main().isShow_mini_player) PlaceFactory.getPlayerPlace(
                 account_id

@@ -122,6 +122,14 @@ class AudiosFragment : BaseMvpFragment<AudiosPresenter, IAudiosView>(), IAudiosV
         val recyclerView: RecyclerView = root.findViewById(R.id.recycler_view)
         recyclerView.layoutManager = LinearLayoutManager(requireActivity())
         val goto: FloatingActionButton = root.findViewById(R.id.goto_button)
+        val resumeQueue: FloatingActionButton = root.findViewById(R.id.resume_queue_button)
+        val isMyMusicPage = !isSelectMode &&
+            !requireArguments().containsKey(Extra.ALBUM_ID) &&
+            requireArguments().getLong(Extra.OWNER_ID) == requireArguments().getLong(Extra.ACCOUNT_ID)
+        resumeQueue.visibility = if (isMyMusicPage) View.VISIBLE else View.GONE
+        resumeQueue.setOnClickListener {
+            presenter?.resumePermanentQueue(requireActivity())
+        }
         if (!inTabsContainer) {
             toolbar.visibility = View.VISIBLE
             (requireActivity() as AppCompatActivity).setSupportActionBar(toolbar)
@@ -152,6 +160,10 @@ class AudiosFragment : BaseMvpFragment<AudiosPresenter, IAudiosView>(), IAudiosV
                         imeFixedBottom + Utils.dp(16f)
                     (goto.layoutParams as? CoordinatorLayout.LayoutParams)?.rightMargin =
                         insets.right + Utils.dp(16f)
+                    (resumeQueue.layoutParams as? CoordinatorLayout.LayoutParams)?.bottomMargin =
+                        imeFixedBottom + Utils.dp(16f)
+                    (resumeQueue.layoutParams as? CoordinatorLayout.LayoutParams)?.leftMargin =
+                        insets.left + Utils.dp(16f)
                     WindowInsetsCompat.CONSUMED
                 }
             }
@@ -200,6 +212,7 @@ class AudiosFragment : BaseMvpFragment<AudiosPresenter, IAudiosView>(), IAudiosV
             isSaveMode = !isSaveMode
             goto.setImageResource(if (isSaveMode) R.drawable.check else R.drawable.audio_player)
             save_mode.setImageResource(if (isSaveMode) R.drawable.ic_dismiss else R.drawable.save)
+            resumeQueue.visibility = if (isMyMusicPage && !isSaveMode) View.VISIBLE else View.GONE
             mAudioRecyclerAdapter?.toggleSelectMode(isSaveMode)
             presenter?.fireUpdateSelectMode()
         }

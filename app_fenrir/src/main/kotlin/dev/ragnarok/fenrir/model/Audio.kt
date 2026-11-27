@@ -223,7 +223,7 @@ class Audio : AbsModel {
     }
 
     val isHLS: Boolean
-        get() = url?.contains("index.m3u8") == true
+        get() = url?.contains(".m3u8", ignoreCase = true) == true
 
     fun setAlbum_title(album_title: String?): Audio {
         this.album_title = album_title
