@@ -21,6 +21,29 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: gradle
+      - name: Detect Android SDK path
+        run: echo "ANDROID_SDK_DIR=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+      - name: Cache Gradle Build Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches/build-cache-*
+          key: gradle-build-cache-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            gradle-build-cache-${{ github.ref_name }}-
+            gradle-build-cache-
+      - name: Cache Android SDK 37 & Build Tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_DIR }}/platforms/android-37.0
+            ${{ env.ANDROID_SDK_DIR }}/platforms/android-37.1
+            ${{ env.ANDROID_SDK_DIR }}/build-tools/37.0.0
+          key: android-sdk-37-bt37.0.0-v1
+      - name: Cache playback test Kotlin compiler
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fenrir-playback-kotlin
+          key: playback-kotlin-${{ hashFiles('ci/test-playback.py') }}
       - name: Playback regression contracts (JVM; no Android/NDK)
         run: python3 ci/test-playback.py
       - name: Run CI script

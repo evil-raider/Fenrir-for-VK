@@ -37,8 +37,18 @@ patch_sources(){
 
 install_sdk(){
   section "Install SDK packages"
-  yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-  "$SDKMANAGER" "platform-tools" "platforms;android-37.0" "platforms;android-37.1" "build-tools;${BUILD_TOOLS}" "ndk;${NDK_VER}" "cmake;${CMAKE_VER}" || echo "WARN: sdkmanager returned non-zero"
+  local pkgs=()
+  [ -d "${ANDROID_HOME}/platform-tools" ] || pkgs+=("platform-tools")
+  [ -d "${ANDROID_HOME}/platforms/android-37.0" ] || pkgs+=("platforms;android-37.0")
+  [ -d "${ANDROID_HOME}/platforms/android-37.1" ] || pkgs+=("platforms;android-37.1")
+  [ -d "${ANDROID_HOME}/build-tools/${BUILD_TOOLS}" ] || pkgs+=("build-tools;${BUILD_TOOLS}")
+  [ -d "$NDK_PATH" ] || pkgs+=("ndk;${NDK_VER}")
+  if [ "${#pkgs[@]}" -gt 0 ]; then
+    yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+    "$SDKMANAGER" "${pkgs[@]}" || echo "WARN: sdkmanager returned non-zero"
+  else
+    echo "All required SDK packages already present"
+  fi
   if [ ! -e "${ANDROID_HOME}/platforms/android-37" ]; then
     for p in android-37.1 android-37.0; do
       if [ -d "${ANDROID_HOME}/platforms/$p" ]; then ln -sfn "$p" "${ANDROID_HOME}/platforms/android-37"; break; fi
@@ -69,6 +79,10 @@ build_native_aar(){
     cp "/tmp/${nkey}.aar" compiled_native/native-release.aar
   else
     section "Native aar: CACHE MISS -> full native build"
+    if [ ! -d "${ANDROID_HOME}/cmake/${CMAKE_VER}" ]; then
+      yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+      "$SDKMANAGER" "cmake;${CMAKE_VER}" || echo "WARN: sdkmanager cmake returned non-zero"
+    fi
     mkdir -p "$HOME/Android/Sdk/ndk"
     ln -sfn "$NDK_PATH" "$HOME/Android/Sdk/ndk/${NDK_VER}"
     chmod +x native/ffmpeg.sh native/src/main/jni/build_ffmpeg.sh 2>/dev/null || true
@@ -78,7 +92,7 @@ build_native_aar(){
     section "Enable :native and assemble release aar"
     printf '\ninclude(":native")\n' >> settings.gradle.kts
     chmod +x ./gradlew
-    ./gradlew :native:assembleRelease --stacktrace --no-daemon
+    ./gradlew :native:assembleRelease --build-cache --stacktrace --no-daemon
     local aar; aar="$(find native/build/outputs/aar -name '*.aar' 2>/dev/null | head -n1)"
     echo "built aar: ${aar:-NONE}"
     [ -n "$aar" ] || return 1
@@ -94,7 +108,7 @@ build_app(){
   section "Build :app_fenrir:assembleFenrirDebug"
   [ -f compiled_native/native-release.aar ] || { echo "ERROR: native aar missing"; return 1; }
   chmod +x ./gradlew
-  ./gradlew :app_fenrir:assembleFenrirDebug --stacktrace --no-daemon
+  ./gradlew :app_fenrir:assembleFenrirDebug --build-cache --stacktrace --no-daemon
   section "Collect APK"
   find app_fenrir/build/outputs/apk -name '*.apk' 2>/dev/null | sort || true
   local apk; apk="$(find app_fenrir/build/outputs/apk -name '*ebug*.apk' 2>/dev/null | grep -i fenrir | head -n1)"
@@ -116,7 +130,7 @@ build_app_release(){
   section "Build :app_fenrir:assembleFenrirRelease (R8, signed with user keystore)"
   [ -f compiled_native/native-release.aar ] || { echo "ERROR: native aar missing"; return 1; }
   chmod +x ./gradlew
-  ./gradlew :app_fenrir:assembleFenrirRelease --stacktrace --no-daemon || return 1
+  ./gradlew :app_fenrir:assembleFenrirRelease --build-cache --stacktrace --no-daemon || return 1
   section "Collect release APK"
   find app_fenrir/build/outputs/apk -name '*.apk' 2>/dev/null | sort || true
   local apk; apk="$(find app_fenrir/build/outputs/apk -path '*release*' -name '*.apk' 2>/dev/null | grep -i fenrir | head -n1)"
