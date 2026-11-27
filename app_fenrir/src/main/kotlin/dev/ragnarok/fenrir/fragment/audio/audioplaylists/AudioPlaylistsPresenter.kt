@@ -415,7 +415,6 @@ class AudioPlaylistsPresenter(accountId: Long, val owner_id: Long, savedInstance
             if (playlists.isEmpty()) {
                 fireRefresh()
             } else {
-                Foffset = offset
                 endOfContent = isEnd
                 playlists.clear()
                 playlists.addAll(addon)
